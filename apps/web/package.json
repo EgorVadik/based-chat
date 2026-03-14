@@ -1,0 +1,45 @@
+{
+  "name": "web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "serve": "vite preview",
+    "start": "vite",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@based-chat/backend": "workspace:*",
+    "@based-chat/env": "workspace:*",
+    "@based-chat/ui": "workspace:*",
+    "@convex-dev/better-auth": "catalog:",
+    "@hookform/resolvers": "^5.1.1",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/react-form": "catalog:",
+    "@tanstack/react-router": "^1.141.1",
+    "better-auth": "catalog:",
+    "convex": "catalog:",
+    "dotenv": "catalog:",
+    "lucide-react": "catalog:",
+    "next-themes": "catalog:",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "sonner": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@based-chat/config": "workspace:*",
+    "@tanstack/react-router-devtools": "^1.141.1",
+    "@tanstack/router-plugin": "^1.141.1",
+    "@types/node": "^22.13.14",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "^4.3.4",
+    "postcss": "^8.5.3",
+    "tailwindcss": "catalog:",
+    "typescript": "^5",
+    "vite": "^6.2.2"
+  }
+}

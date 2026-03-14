@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "scheme": "based-chat",
+    "userInterfaceStyle": "automatic",
+    "orientation": "default",
+    "web": {
+      "bundler": "metro"
+    },
+    "name": "based-chat",
+    "slug": "based-chat",
+    "plugins": ["expo-font"],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
