@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 import AppSidebar from "@/components/chat/app-sidebar";
 import ChatArea from "@/components/chat/chat-area";
-import { CONVERSATIONS, MODELS } from "@/lib/fake-data";
+import { CONVERSATIONS, MODELS, type Model } from "@/lib/fake-data";
 
 export const Route = createFileRoute("/")({
   component: HomeComponent,
@@ -11,14 +11,19 @@ export const Route = createFileRoute("/")({
 
 function HomeComponent() {
   const [activeId, setActiveId] = useState<string | null>("conv-1");
+  const [selectedModel, setSelectedModel] = useState<Model>(MODELS[0]!);
 
   const activeConversation =
     CONVERSATIONS.find((c) => c.id === activeId) ?? null;
 
-  const currentModel = activeConversation?.model ?? MODELS[0]!;
+  const currentModel = activeConversation?.model ?? selectedModel;
 
   const handleNewChat = useCallback(() => {
     setActiveId(null);
+  }, []);
+
+  const handleModelChange = useCallback((model: Model) => {
+    setSelectedModel(model);
   }, []);
 
   return (
@@ -30,7 +35,11 @@ function HomeComponent() {
         onNewChat={handleNewChat}
       />
       <SidebarInset>
-        <ChatArea conversation={activeConversation} model={currentModel} />
+        <ChatArea
+          conversation={activeConversation}
+          model={currentModel}
+          onModelChange={handleModelChange}
+        />
       </SidebarInset>
     </SidebarProvider>
   );

@@ -8,7 +8,7 @@ import MessageBubble from "./message-bubble";
 
 function EmptyState({ model }: { model: Model }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-4">
+    <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-4">
       <div className="flex flex-col items-center gap-4 max-w-md text-center">
         <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10">
           <Sparkles className="size-6 text-primary" />
@@ -46,9 +46,11 @@ function EmptyState({ model }: { model: Model }) {
 export default function ChatArea({
   conversation,
   model,
+  onModelChange,
 }: {
   conversation: Conversation | null;
   model: Model;
+  onModelChange: (model: Model) => void;
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasMessages = conversation && conversation.messages.length > 0;
@@ -60,7 +62,7 @@ export default function ChatArea({
   return (
     <div className="flex h-svh flex-col">
       {/* Top bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 shrink-0">
         <SidebarTrigger />
         <Separator orientation="vertical" className="h-4" />
         <span className="text-xs font-medium text-muted-foreground truncate">
@@ -70,7 +72,7 @@ export default function ChatArea({
 
       {/* Messages area */}
       {hasMessages ? (
-        <div className="flex-1 overflow-y-auto thin-scrollbar">
+        <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar">
           <div className="mx-auto max-w-3xl py-4">
             {conversation.messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
@@ -83,7 +85,7 @@ export default function ChatArea({
       )}
 
       {/* Input */}
-      <ChatInput model={model} />
+      <ChatInput model={model} onModelChange={onModelChange} />
     </div>
   );
 }

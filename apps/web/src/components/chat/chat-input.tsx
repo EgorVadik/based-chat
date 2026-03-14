@@ -1,25 +1,22 @@
 import { Button } from "@based-chat/ui/components/button";
+import { Textarea } from "@based-chat/ui/components/textarea";
 import { cn } from "@based-chat/ui/lib/utils";
-import { ArrowUp, Paperclip, ChevronDown } from "lucide-react";
+import { ArrowUp, Paperclip } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import type { Model } from "@/lib/fake-data";
+import ModelSelector from "./model-selector";
 
-function ModelBadge({ model }: { model: Model }) {
-  return (
-    <button className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group">
-      <div className="size-2 rounded-full bg-primary/60 group-hover:bg-primary transition-colors" />
-      <span className="font-medium">{model.name}</span>
-      <ChevronDown className="size-3 opacity-50" />
-    </button>
-  );
-}
+const MIN_TEXTAREA_HEIGHT = 96;
+const MAX_TEXTAREA_HEIGHT = 240;
 
 export default function ChatInput({
   model,
+  onModelChange,
   onSend,
   className,
 }: {
   model: Model;
+  onModelChange: (model: Model) => void;
   onSend?: (message: string) => void;
   className?: string;
 }) {
@@ -31,7 +28,8 @@ export default function ChatInput({
     onSend?.(value.trim());
     setValue("");
     if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+      textareaRef.current.style.overflowY = "hidden";
     }
   }, [value, onSend]);
 
@@ -48,25 +46,33 @@ export default function ChatInput({
   const handleInput = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    textarea.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+    const nextHeight = Math.min(
+      Math.max(textarea.scrollHeight, MIN_TEXTAREA_HEIGHT),
+      MAX_TEXTAREA_HEIGHT,
+    );
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
   }, []);
 
   return (
-    <div className={cn("w-full", className)}>
+    <div className={cn("w-full shrink-0", className)}>
       <div className="mx-auto max-w-3xl px-4 pb-4">
-        <div className="relative rounded-2xl border border-border/60 bg-card/50 backdrop-blur-sm transition-colors focus-within:border-primary/30 focus-within:bg-card">
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onInput={handleInput}
-            placeholder="Send a message..."
-            rows={1}
-            className="w-full resize-none bg-transparent px-4 pt-3.5 pb-12 text-sm leading-relaxed placeholder:text-muted-foreground/50 focus:outline-none"
-          />
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 pb-2.5">
+        <div className="rounded-2xl border border-border/60 bg-card/50 backdrop-blur-sm transition-colors focus-within:border-primary/30 focus-within:bg-card">
+          <div className="px-4 pt-3.5">
+            <Textarea
+              ref={textareaRef}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onInput={handleInput}
+              placeholder="Send a message..."
+              rows={1}
+              className="block min-h-[96px] w-full resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 pb-3 text-sm leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
+            />
+          </div>
+          <div className="flex items-center justify-between border-t border-border/40 px-3 py-2.5">
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -75,7 +81,7 @@ export default function ChatInput({
               >
                 <Paperclip className="size-4" />
               </Button>
-              <ModelBadge model={model} />
+              <ModelSelector model={model} onModelChange={onModelChange} />
             </div>
             <Button
               size="icon-sm"
