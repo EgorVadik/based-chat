@@ -26,6 +26,10 @@
     "next-themes": "catalog:",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.0.2",
     "sonner": "catalog:",
     "zod": "catalog:"
   },
@@ -36,6 +40,7 @@
     "@types/node": "^22.13.14",
     "@types/react": "^19.2.10",
     "@types/react-dom": "catalog:",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "postcss": "^8.5.3",
     "tailwindcss": "catalog:",

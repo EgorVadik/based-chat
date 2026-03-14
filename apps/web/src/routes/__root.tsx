@@ -1,8 +1,8 @@
 import { Toaster } from "@based-chat/ui/components/sonner";
+import { TooltipProvider } from "@based-chat/ui/components/tooltip";
 import { HeadContent, Outlet, createRootRouteWithContext } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 
-import Header from "@/components/header";
 import { ThemeProvider } from "@/components/theme-provider";
 
 import "../index.css";
@@ -14,11 +14,11 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
   head: () => ({
     meta: [
       {
-        title: "based-chat",
+        title: "Based Chat",
       },
       {
         name: "description",
-        content: "based-chat is a web application",
+        content: "Based Chat — AI chat for the based.",
       },
     ],
     links: [
@@ -40,10 +40,9 @@ function RootComponent() {
         disableTransitionOnChange
         storageKey="vite-ui-theme"
       >
-        <div className="grid grid-rows-[auto_1fr] h-svh">
-          <Header />
+        <TooltipProvider>
           <Outlet />
-        </div>
+        </TooltipProvider>
         <Toaster richColors />
       </ThemeProvider>
       <TanStackRouterDevtools position="bottom-left" />
