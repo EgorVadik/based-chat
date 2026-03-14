@@ -9,4 +9,12 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_userId_modelId", ["userId", "modelId"]),
+  threads: defineTable({
+    userId: v.string(),
+    title: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_updatedAt", ["userId", "updatedAt"]),
 });

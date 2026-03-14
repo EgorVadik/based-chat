@@ -31,11 +31,11 @@ import {
   MessageSquare,
   Trash2,
 } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 
-import type { Conversation } from "@/lib/fake-data";
-import { getConversationsByTimeGroup } from "@/lib/fake-data";
 import { authClient } from "@/lib/auth-client";
+import { getThreadsByTimeGroup, type ThreadSummary } from "@/lib/threads";
 
 function BrandMark() {
   return (
@@ -57,38 +57,32 @@ function BrandMark() {
   );
 }
 
-function getModelDotColor(provider: string) {
-  switch (provider) {
-    case "Anthropic":
-      return "bg-[oklch(0.72_0.17_195)]";
-    case "OpenAI":
-      return "bg-[oklch(0.72_0.15_145)]";
-    case "Google":
-      return "bg-[oklch(0.72_0.16_60)]";
-    case "DeepSeek":
-      return "bg-[oklch(0.65_0.18_270)]";
-    default:
-      return "bg-muted-foreground";
-  }
-}
-
 export default function AppSidebar({
-  conversations,
-  activeConversationId,
-  onSelectConversation,
+  threads,
+  activeThreadId,
+  onSelectThread,
   onNewChat,
+  onLoadMoreThreads,
+  threadPaginationStatus,
   user,
 }: {
-  conversations: Conversation[];
-  activeConversationId: string | null;
-  onSelectConversation: (id: string) => void;
+  threads: ThreadSummary[];
+  activeThreadId: ThreadSummary["_id"] | null;
+  onSelectThread: (id: ThreadSummary["_id"]) => void;
   onNewChat: () => void;
+  onLoadMoreThreads: () => void;
+  threadPaginationStatus:
+    | "LoadingFirstPage"
+    | "CanLoadMore"
+    | "LoadingMore"
+    | "Exhausted";
   user: {
     name?: string | null;
     email?: string | null;
   };
 }) {
-  const groups = getConversationsByTimeGroup(conversations);
+  const groups = getThreadsByTimeGroup(threads);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const displayName = user.name?.trim() || user.email?.split("@")[0] || "Signed in";
   const displayEmail = user.email || "No email available";
   const initials = displayName
@@ -97,6 +91,32 @@ export default function AppSidebar({
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "BC";
+
+  useEffect(() => {
+    if (threadPaginationStatus !== "CanLoadMore") {
+      return;
+    }
+
+    const node = loadMoreRef.current;
+    if (!node) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMoreThreads();
+        }
+      },
+      {
+        rootMargin: "120px",
+      },
+    );
+
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, [onLoadMoreThreads, threadPaginationStatus]);
 
   return (
     <Sidebar>
@@ -115,7 +135,7 @@ export default function AppSidebar({
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
           <Input
-            placeholder="Search conversations..."
+            placeholder="Search threads..."
             className="h-8 rounded-lg border-0 bg-sidebar-accent/50 pl-8 text-xs shadow-none placeholder:text-muted-foreground/40 focus-visible:bg-sidebar-accent focus-visible:ring-0 dark:bg-sidebar-accent/60"
           />
         </div>
@@ -131,35 +151,54 @@ export default function AppSidebar({
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {group.conversations.map((conv) => (
-                  <SidebarMenuItem key={conv.id}>
-                    <SidebarMenuButton
-                      isActive={conv.id === activeConversationId}
-                      onClick={() => onSelectConversation(conv.id)}
-                      className="group/conv"
-                    >
-                      <div
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          getModelDotColor(conv.model.provider),
-                        )}
-                      />
-                      <span className="truncate">{conv.title}</span>
-                      <button
-                        className="ml-auto opacity-0 group-hover/conv:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
+                {group.threads.map((thread) => {
+                  return (
+                    <SidebarMenuItem key={thread._id}>
+                      <SidebarMenuButton
+                        isActive={thread._id === activeThreadId}
+                        onClick={() => onSelectThread(thread._id)}
+                        className="group/conv"
                       >
-                        <Trash2 className="size-3" />
-                      </button>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                        <div
+                          className={cn(
+                            "size-1.5 shrink-0 rounded-full",
+                            "bg-muted-foreground/50",
+                          )}
+                        />
+                        <span className="truncate">{thread.title}</span>
+                        <button
+                          className="ml-auto opacity-0 group-hover/conv:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
+        {threads.length === 0 && threadPaginationStatus !== "LoadingFirstPage" ? (
+          <div className="px-4 py-6 text-xs text-sidebar-foreground/50">
+            No threads yet.
+          </div>
+        ) : null}
+        <div ref={loadMoreRef} className="px-4 py-3">
+          {threadPaginationStatus === "LoadingFirstPage" ? (
+            <p className="text-[10px] font-mono uppercase tracking-widest text-sidebar-foreground/40">
+              Loading threads...
+            </p>
+          ) : null}
+          {threadPaginationStatus === "LoadingMore" ? (
+            <p className="text-[10px] font-mono uppercase tracking-widest text-sidebar-foreground/40">
+              Loading more threads...
+            </p>
+          ) : null}
+        </div>
       </SidebarContent>
 
       <SidebarSeparator />

@@ -1,15 +1,20 @@
+import { Button } from "@based-chat/ui/components/button";
 import { SidebarTrigger } from "@based-chat/ui/components/sidebar";
 import { Separator } from "@based-chat/ui/components/separator";
-import { Sparkles } from "lucide-react";
+import { LoaderCircle, Sparkles, WandSparkles } from "lucide-react";
 import { useEffect, useRef } from "react";
-import type { Conversation, Model } from "@/lib/fake-data";
+
+import type { ChatMessage } from "@/lib/chat";
+import type { Model } from "@/lib/models";
+import type { ThreadSummary } from "@/lib/threads";
+
 import ChatInput from "./chat-input";
 import MessageBubble from "./message-bubble";
 
 function EmptyState({ model }: { model: Model }) {
   return (
-    <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-4">
-      <div className="flex flex-col items-center gap-4 max-w-md text-center">
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4">
+      <div className="flex max-w-md flex-col items-center gap-4 text-center">
         <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10">
           <Sparkles className="size-6 text-primary" />
         </div>
@@ -17,13 +22,13 @@ function EmptyState({ model }: { model: Model }) {
           <h2 className="text-lg font-semibold tracking-tight">
             Start a conversation
           </h2>
-          <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
             Ask anything. Write code. Analyze data. Get creative.
             <br />
-            <span className="text-primary/80 font-medium">{model.name}</span> is ready.
+            <span className="font-medium text-primary/80">{model.name}</span> is ready.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2 w-full mt-2">
+        <div className="mt-2 grid w-full grid-cols-2 gap-2">
           {[
             "Explain quantum computing",
             "Write a Python web scraper",
@@ -32,7 +37,7 @@ function EmptyState({ model }: { model: Model }) {
           ].map((prompt) => (
             <button
               key={prompt}
-              className="rounded-lg border border-border/50 bg-card/30 px-3 py-2.5 text-left text-xs text-muted-foreground hover:bg-card/60 hover:text-foreground hover:border-border transition-all"
+              className="rounded-lg border border-border/50 bg-card/30 px-3 py-2.5 text-left text-xs text-muted-foreground transition-all hover:border-border hover:bg-card/60 hover:text-foreground"
             >
               {prompt}
             </button>
@@ -44,37 +49,62 @@ function EmptyState({ model }: { model: Model }) {
 }
 
 export default function ChatArea({
-  conversation,
+  thread,
+  messages,
   model,
   onModelChange,
+  onSimulateMessage,
+  isStreaming,
 }: {
-  conversation: Conversation | null;
+  thread: ThreadSummary | null;
+  messages: ChatMessage[];
   model: Model;
   onModelChange: (model: Model) => void;
+  onSimulateMessage: () => void;
+  isStreaming: boolean;
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const hasMessages = conversation && conversation.messages.length > 0;
+  const hasMessages = messages.length > 0;
+  const lastMessage = messages.at(-1);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversation?.messages.length]);
+  }, [
+    messages.length,
+    lastMessage?.content,
+    lastMessage?.isStreaming,
+  ]);
 
   return (
     <div className="flex h-svh flex-col">
-      {/* Top bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 shrink-0">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2">
         <SidebarTrigger />
         <Separator orientation="vertical" className="h-4" />
-        <span className="text-xs font-medium text-muted-foreground truncate">
-          {conversation?.title || "New chat"}
+        <span className="truncate text-xs font-medium text-muted-foreground">
+          {thread?.title || "New chat"}
         </span>
+        <div className="ml-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onSimulateMessage}
+            disabled={!thread || isStreaming}
+            className="rounded-full border-border/60 bg-background/80 px-3 backdrop-blur-sm"
+          >
+            {isStreaming ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <WandSparkles className="size-3.5" />
+            )}
+            <span>{isStreaming ? "Streaming..." : "Simulate Stream"}</span>
+          </Button>
+        </div>
       </div>
 
-      {/* Messages area */}
       {hasMessages ? (
-        <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar">
+        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl py-4">
-            {conversation.messages.map((message) => (
+            {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
             <div ref={messagesEndRef} />
@@ -84,7 +114,6 @@ export default function ChatArea({
         <EmptyState model={model} />
       )}
 
-      {/* Input */}
       <ChatInput model={model} onModelChange={onModelChange} />
     </div>
   );

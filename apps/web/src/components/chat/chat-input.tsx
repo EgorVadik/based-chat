@@ -3,7 +3,7 @@ import { Textarea } from "@based-chat/ui/components/textarea";
 import { cn } from "@based-chat/ui/lib/utils";
 import { ArrowUp, Paperclip } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
-import type { Model } from "@/lib/fake-data";
+import type { Model } from "@/lib/models";
 import ModelSelector from "./model-selector";
 
 const MIN_TEXTAREA_HEIGHT = 96;

@@ -28,7 +28,7 @@ import {
   PROVIDERS,
   type Model,
   type ModelCapability,
-} from "@/lib/fake-data";
+} from "@/lib/models";
 
 type ModelFilter = "all" | "favorites" | (typeof PROVIDERS)[number]["id"];
 
