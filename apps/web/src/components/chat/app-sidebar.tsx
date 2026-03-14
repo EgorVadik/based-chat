@@ -30,6 +30,7 @@ import {
   ChevronsUpDown,
   MessageSquare,
   Trash2,
+  LoaderCircle,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
@@ -60,7 +61,9 @@ function BrandMark() {
 export default function AppSidebar({
   threads,
   activeThreadId,
+  streamingThreadIds,
   onSelectThread,
+  onPrefetchThread,
   onNewChat,
   onLoadMoreThreads,
   threadPaginationStatus,
@@ -68,7 +71,9 @@ export default function AppSidebar({
 }: {
   threads: ThreadSummary[];
   activeThreadId: ThreadSummary["_id"] | null;
+  streamingThreadIds: ThreadSummary["_id"][];
   onSelectThread: (id: ThreadSummary["_id"]) => void;
+  onPrefetchThread: (id: ThreadSummary["_id"]) => void;
   onNewChat: () => void;
   onLoadMoreThreads: () => void;
   threadPaginationStatus:
@@ -152,28 +157,38 @@ export default function AppSidebar({
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.threads.map((thread) => {
+                  const isStreamingThread = streamingThreadIds.includes(thread._id);
+
                   return (
                     <SidebarMenuItem key={thread._id}>
                       <SidebarMenuButton
                         isActive={thread._id === activeThreadId}
                         onClick={() => onSelectThread(thread._id)}
-                        className="group/conv"
+                        onMouseEnter={() => onPrefetchThread(thread._id)}
+                        onFocus={() => onPrefetchThread(thread._id)}
+                        className="group/conv cursor-pointer"
                       >
                         <div
                           className={cn(
                             "size-1.5 shrink-0 rounded-full",
-                            "bg-muted-foreground/50",
+                            isStreamingThread
+                              ? "bg-primary/70"
+                              : "bg-muted-foreground/50",
                           )}
                         />
                         <span className="truncate">{thread.title}</span>
-                        <button
-                          className="ml-auto opacity-0 group-hover/conv:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                          }}
-                        >
-                          <Trash2 className="size-3" />
-                        </button>
+                        {isStreamingThread ? (
+                          <LoaderCircle className="ml-auto size-3 animate-spin text-primary" />
+                        ) : (
+                          <button
+                            className="ml-auto opacity-0 group-hover/conv:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                            }}
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );

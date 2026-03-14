@@ -12,6 +12,7 @@ import type * as auth from "../auth.js";
 import type * as favoriteModels from "../favoriteModels.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
+import type * as messages from "../messages.js";
 import type * as threads from "../threads.js";
 
 import type {
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   favoriteModels: typeof favoriteModels;
   healthCheck: typeof healthCheck;
   http: typeof http;
+  messages: typeof messages;
   threads: typeof threads;
 }>;
 

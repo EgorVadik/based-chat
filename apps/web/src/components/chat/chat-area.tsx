@@ -1,8 +1,8 @@
 import { Button } from "@based-chat/ui/components/button";
 import { SidebarTrigger } from "@based-chat/ui/components/sidebar";
 import { Separator } from "@based-chat/ui/components/separator";
-import { LoaderCircle, Sparkles, WandSparkles } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ArrowDown, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ChatMessage } from "@/lib/chat";
 import type { Model } from "@/lib/models";
@@ -53,68 +53,190 @@ export default function ChatArea({
   messages,
   model,
   onModelChange,
-  onSimulateMessage,
+  onSendMessage,
+  onEditMessage,
+  onRetryMessage,
   isStreaming,
 }: {
   thread: ThreadSummary | null;
   messages: ChatMessage[];
   model: Model;
   onModelChange: (model: Model) => void;
-  onSimulateMessage: () => void;
+  onSendMessage: (message: string) => void | Promise<void>;
+  onEditMessage: (
+    message: ChatMessage,
+    nextContent: string,
+    nextModel: Model,
+  ) => void | Promise<void>;
+  onRetryMessage: (message: ChatMessage) => void | Promise<void>;
   isStreaming: boolean;
 }) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const hasMessages = messages.length > 0;
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [draftMessage, setDraftMessage] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [editingModel, setEditingModel] = useState<Model | null>(null);
   const lastMessage = messages.at(-1);
 
+  const updateScrollState = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isAtBottom = distanceFromBottom <= 24;
+
+    isAtBottomRef.current = isAtBottom;
+    setShowScrollToBottom(!isAtBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+    isAtBottomRef.current = true;
+    setShowScrollToBottom(false);
+  }, []);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    updateScrollState();
+  }, [messages.length, thread?._id, updateScrollState]);
+
+  useEffect(() => {
+    scrollToBottom("auto");
+  }, [thread?._id, scrollToBottom]);
+
+  useEffect(() => {
+    setDraftMessage("");
+    setEditingMessageId(null);
+    setEditingValue("");
+    setEditingModel(null);
+  }, [thread?._id]);
+
+  useEffect(() => {
+    if (lastMessage?.isStreaming) {
+      updateScrollState();
+      return;
+    }
+
+    if (isAtBottomRef.current) {
+      scrollToBottom("auto");
+      return;
+    }
+
+    updateScrollState();
   }, [
-    messages.length,
     lastMessage?.content,
+    lastMessage?.id,
     lastMessage?.isStreaming,
+    messages.length,
+    scrollToBottom,
+    updateScrollState,
   ]);
 
   return (
-    <div className="flex h-svh flex-col">
+    <div className="relative flex h-svh flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2">
         <SidebarTrigger />
         <Separator orientation="vertical" className="h-4" />
         <span className="truncate text-xs font-medium text-muted-foreground">
           {thread?.title || "New chat"}
         </span>
-        <div className="ml-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onSimulateMessage}
-            disabled={!thread || isStreaming}
-            className="rounded-full border-border/60 bg-background/80 px-3 backdrop-blur-sm"
-          >
-            {isStreaming ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <WandSparkles className="size-3.5" />
-            )}
-            <span>{isStreaming ? "Streaming..." : "Simulate Stream"}</span>
-          </Button>
-        </div>
       </div>
 
       {hasMessages ? (
-        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl py-4">
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
-            <div ref={messagesEndRef} />
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollContainerRef}
+            onScroll={updateScrollState}
+            className="thin-scrollbar h-full overflow-y-auto"
+          >
+            <div className="mx-auto max-w-3xl py-4">
+              {messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onRetry={() => void onRetryMessage(message)}
+                  onEdit={
+                    message.role === "user"
+                      ? () => {
+                          setEditingMessageId(message.id);
+                          setEditingValue(message.content);
+                          setEditingModel(message.model ?? model);
+                        }
+                      : undefined
+                  }
+                  isEditing={editingMessageId === message.id}
+                  editingValue={editingValue}
+                  editingModel={editingModel ?? undefined}
+                  onEditingValueChange={setEditingValue}
+                  onEditingModelChange={setEditingModel}
+                  onCancelEdit={() => {
+                    setEditingMessageId(null);
+                    setEditingValue("");
+                    setEditingModel(null);
+                  }}
+                  onSaveEdit={() => {
+                    if (!editingMessageId || !editingModel) {
+                      return;
+                    }
+
+                    void Promise.resolve(
+                      onEditMessage(message, editingValue, editingModel),
+                    ).then(() => {
+                      setEditingMessageId(null);
+                      setEditingValue("");
+                      setEditingModel(null);
+                    });
+                  }}
+                />
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
+          {showScrollToBottom ? (
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10">
+              <div className="mx-auto flex max-w-3xl justify-center px-4">
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="outline"
+                  onClick={() => scrollToBottom("auto")}
+                  className="pointer-events-auto rounded-full border-border bg-card/95 text-foreground shadow-xl backdrop-blur-sm"
+                >
+                  <ArrowDown className="size-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <EmptyState model={model} />
       )}
 
-      <ChatInput model={model} onModelChange={onModelChange} />
+      <ChatInput
+        model={model}
+        onModelChange={onModelChange}
+        value={draftMessage}
+        onValueChange={setDraftMessage}
+        onSend={async (message) => {
+          await onSendMessage(message);
+          setDraftMessage("");
+        }}
+        disabled={isStreaming}
+      />
     </div>
   );
 }

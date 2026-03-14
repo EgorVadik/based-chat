@@ -2,7 +2,7 @@ import { Button } from "@based-chat/ui/components/button";
 import { Textarea } from "@based-chat/ui/components/textarea";
 import { cn } from "@based-chat/ui/lib/utils";
 import { ArrowUp, Paperclip } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Model } from "@/lib/models";
 import ModelSelector from "./model-selector";
 
@@ -13,31 +13,72 @@ export default function ChatInput({
   model,
   onModelChange,
   onSend,
+  value,
+  onValueChange,
+  disabled = false,
   className,
 }: {
   model: Model;
   onModelChange: (model: Model) => void;
-  onSend?: (message: string) => void;
+  onSend?: (message: string) => void | Promise<void>;
+  value?: string;
+  onValueChange?: (value: string) => void;
+  disabled?: boolean;
   className?: string;
 }) {
-  const [value, setValue] = useState("");
+  const [internalValue, setInternalValue] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentValue = value ?? internalValue;
 
-  const handleSend = useCallback(() => {
-    if (!value.trim()) return;
-    onSend?.(value.trim());
-    setValue("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
-      textareaRef.current.style.overflowY = "hidden";
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+    const nextHeight = Math.min(
+      Math.max(textarea.scrollHeight, MIN_TEXTAREA_HEIGHT),
+      MAX_TEXTAREA_HEIGHT,
+    );
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+  }, [currentValue]);
+
+  const setValue = useCallback(
+    (nextValue: string) => {
+      if (onValueChange) {
+        onValueChange(nextValue);
+        return;
+      }
+
+      setInternalValue(nextValue);
+    },
+    [onValueChange],
+  );
+
+  const handleSend = useCallback(async () => {
+    if (disabled || isSubmitting || !currentValue.trim()) return;
+
+    setIsSubmitting(true);
+
+    try {
+      await onSend?.(currentValue.trim());
+      setValue("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+        textareaRef.current.style.overflowY = "hidden";
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [value, onSend]);
+  }, [currentValue, disabled, isSubmitting, onSend, setValue]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        void handleSend();
       }
     },
     [handleSend],
@@ -63,10 +104,11 @@ export default function ChatInput({
           <div className="px-4 pt-3.5">
             <Textarea
               ref={textareaRef}
-              value={value}
+              value={currentValue}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={handleKeyDown}
               onInput={handleInput}
+              disabled={disabled || isSubmitting}
               placeholder="Send a message..."
               rows={1}
               className="block min-h-[96px] w-full resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 pb-3 text-sm leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
@@ -85,11 +127,11 @@ export default function ChatInput({
             </div>
             <Button
               size="icon-sm"
-              onClick={handleSend}
-              disabled={!value.trim()}
+              onClick={() => void handleSend()}
+              disabled={disabled || isSubmitting || !currentValue.trim()}
               className={cn(
                 "transition-all",
-                value.trim()
+                !disabled && !isSubmitting && currentValue.trim()
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground",
               )}
