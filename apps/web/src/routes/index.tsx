@@ -239,11 +239,7 @@ This streamed mock is local-only for now, but it behaves like an actual assistan
     (isAuthenticated &&
       (user === undefined || threadPaginationStatus === "LoadingFirstPage"))
   ) {
-    return (
-      <div className="flex min-h-svh items-center justify-center">
-        <Loader />
-      </div>
-    );
+    return <Loader variant="shell" />;
   }
 
   if (!isAuthenticated || !user) {

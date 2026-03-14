@@ -15,7 +15,7 @@ function SignInPage() {
   if (isLoading) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <Loader />
+        <Loader variant="compact" />
       </div>
     );
   }

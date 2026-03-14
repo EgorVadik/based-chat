@@ -13,7 +13,7 @@ const convex = new ConvexReactClient(env.VITE_CONVEX_URL);
 const router = createRouter({
   routeTree,
   defaultPreload: "intent",
-  defaultPendingComponent: () => <Loader />,
+  defaultPendingComponent: () => <Loader variant="shell" />,
   context: {},
   Wrap: function WrapComponent({ children }: { children: React.ReactNode }) {
     return (
