@@ -150,3 +150,67 @@ export const updateProfile = mutation({
     };
   },
 });
+
+export const deleteAccount = mutation({
+  args: {
+    confirmation: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.safeGetAuthUser(ctx);
+    if (!user) {
+      throw new ConvexError("Not authenticated");
+    }
+
+    if (args.confirmation !== "delete my account") {
+      throw new ConvexError(
+        'Please type "delete my account" to confirm.',
+      );
+    }
+
+    // Delete all user threads + their messages + attachments
+    const threads = await ctx.db
+      .query("threads")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    for (const thread of threads) {
+      const messages = await ctx.db
+        .query("messages")
+        .withIndex("by_threadId_createdAt", (q) =>
+          q.eq("threadId", thread._id),
+        )
+        .collect();
+
+      for (const message of messages) {
+        for (const attachment of message.attachments ?? []) {
+          await ctx.storage.delete(attachment.storageId);
+        }
+        await ctx.db.delete(message._id);
+      }
+
+      await ctx.db.delete(thread._id);
+    }
+
+    // Delete favorite models
+    const favoriteModels = await ctx.db
+      .query("favoriteModels")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    for (const favorite of favoriteModels) {
+      await ctx.db.delete(favorite._id);
+    }
+
+    // Delete user metadata
+    const metadata = await ctx.db
+      .query("userMetadata")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .unique();
+
+    if (metadata) {
+      await ctx.db.delete(metadata._id);
+    }
+
+    return { success: true };
+  },
+});

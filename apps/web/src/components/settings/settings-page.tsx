@@ -15,6 +15,7 @@ import ThreadHistoryTab from "./thread-history-tab";
 import ModelsTab from "./models-tab";
 import AttachmentsTab from "./attachments-tab";
 import ApiKeysTab from "./api-keys-tab";
+import SecurityTab from "./security-tab";
 
 export default function SettingsPage({
   user,
@@ -187,6 +188,7 @@ export default function SettingsPage({
               {activeTab === "models" && <ModelsTab />}
               {activeTab === "attachments" && <AttachmentsTab />}
               {activeTab === "api-keys" && <ApiKeysTab />}
+              {activeTab === "security" && <SecurityTab />}
             </div>
           </div>
         </div>
