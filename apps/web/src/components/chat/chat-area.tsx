@@ -4,6 +4,15 @@ import { Separator } from "@based-chat/ui/components/separator";
 import { ArrowDown, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  createComposerAttachmentFromMessageAttachment,
+  revokeComposerAttachmentPreview,
+} from "@/lib/attachments";
+import type {
+  AttachmentUploadHandlers,
+  ComposerAttachment,
+  DraftAttachment,
+} from "@/lib/attachments";
 import type { ChatMessage } from "@/lib/chat";
 import type { Model } from "@/lib/models";
 import type { ThreadSummary } from "@/lib/threads";
@@ -62,11 +71,16 @@ export default function ChatArea({
   messages: ChatMessage[];
   model: Model;
   onModelChange: (model: Model) => void;
-  onSendMessage: (message: string) => void | Promise<void>;
+  onSendMessage: (
+    message: string,
+    attachments: DraftAttachment[],
+    uploadHandlers?: AttachmentUploadHandlers,
+  ) => void | Promise<void>;
   onEditMessage: (
     message: ChatMessage,
     nextContent: string,
     nextModel: Model,
+    attachments: ComposerAttachment[],
   ) => void | Promise<void>;
   onRetryMessage: (message: ChatMessage) => void | Promise<void>;
   isStreaming: boolean;
@@ -80,7 +94,18 @@ export default function ChatArea({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [editingModel, setEditingModel] = useState<Model | null>(null);
+  const [editingAttachments, setEditingAttachments] = useState<ComposerAttachment[]>([]);
   const lastMessage = messages.at(-1);
+
+  const resetEditingState = useCallback(() => {
+    setEditingAttachments((currentAttachments) => {
+      currentAttachments.forEach(revokeComposerAttachmentPreview);
+      return [];
+    });
+    setEditingMessageId(null);
+    setEditingValue("");
+    setEditingModel(null);
+  }, []);
 
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -120,10 +145,8 @@ export default function ChatArea({
 
   useEffect(() => {
     setDraftMessage("");
-    setEditingMessageId(null);
-    setEditingValue("");
-    setEditingModel(null);
-  }, [thread?._id]);
+    resetEditingState();
+  }, [resetEditingState, thread?._id]);
 
   useEffect(() => {
     if (lastMessage?.isStreaming) {
@@ -172,21 +195,29 @@ export default function ChatArea({
                   onEdit={
                     message.role === "user"
                       ? () => {
+                          editingAttachments.forEach(revokeComposerAttachmentPreview);
                           setEditingMessageId(message.id);
                           setEditingValue(message.content);
                           setEditingModel(message.model ?? model);
+                          setEditingAttachments(
+                            message.attachments.map(
+                              createComposerAttachmentFromMessageAttachment,
+                            ),
+                          );
                         }
                       : undefined
                   }
                   isEditing={editingMessageId === message.id}
                   editingValue={editingValue}
                   editingModel={editingModel ?? undefined}
+                  editingAttachments={editingAttachments}
                   onEditingValueChange={setEditingValue}
                   onEditingModelChange={setEditingModel}
+                  onEditingAttachmentsChange={(nextAttachments) => {
+                    setEditingAttachments(nextAttachments)
+                  }}
                   onCancelEdit={() => {
-                    setEditingMessageId(null);
-                    setEditingValue("");
-                    setEditingModel(null);
+                    resetEditingState();
                   }}
                   onSaveEdit={() => {
                     if (!editingMessageId || !editingModel) {
@@ -194,11 +225,14 @@ export default function ChatArea({
                     }
 
                     void Promise.resolve(
-                      onEditMessage(message, editingValue, editingModel),
+                      onEditMessage(
+                        message,
+                        editingValue,
+                        editingModel,
+                        editingAttachments,
+                      ),
                     ).then(() => {
-                      setEditingMessageId(null);
-                      setEditingValue("");
-                      setEditingModel(null);
+                      resetEditingState();
                     });
                   }}
                 />
@@ -231,8 +265,9 @@ export default function ChatArea({
         onModelChange={onModelChange}
         value={draftMessage}
         onValueChange={setDraftMessage}
-        onSend={async (message) => {
-          await onSendMessage(message);
+        resetKey={thread?._id ?? "new-thread"}
+        onSend={async (message, attachments, uploadHandlers) => {
+          await onSendMessage(message, attachments, uploadHandlers);
           setDraftMessage("");
         }}
         disabled={isStreaming}

@@ -1,12 +1,38 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
-import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { authComponent } from "./auth";
 
 function normalizeTitle(title?: string) {
   const trimmed = title?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : "New chat";
+}
+
+async function requireAuthenticatedUser(
+  ctx: MutationCtx | QueryCtx,
+) {
+  const user = await authComponent.safeGetAuthUser(ctx);
+  if (!user) {
+    throw new ConvexError("Not authenticated");
+  }
+
+  return user;
+}
+
+async function requireOwnedThread(
+  ctx: MutationCtx | QueryCtx,
+  threadId: Id<"threads">,
+  userId: string,
+) {
+  const thread = await ctx.db.get(threadId);
+
+  if (!thread || thread.userId !== userId) {
+    throw new ConvexError("Thread not found");
+  }
+
+  return thread;
 }
 
 export const listPaginated = query({
@@ -38,10 +64,7 @@ export const create = mutation({
     title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await authComponent.safeGetAuthUser(ctx);
-    if (!user) {
-      throw new ConvexError("Not authenticated");
-    }
+    const user = await requireAuthenticatedUser(ctx);
 
     const timestamp = Date.now();
     const title = normalizeTitle(args.title);
@@ -57,6 +80,41 @@ export const create = mutation({
       title,
       createdAt: timestamp,
       updatedAt: timestamp,
+    };
+  },
+});
+
+export const deleteMany = mutation({
+  args: {
+    threadIds: v.array(v.id("threads")),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx);
+    const uniqueThreadIds = [...new Set(args.threadIds)];
+
+    for (const threadId of uniqueThreadIds) {
+      await requireOwnedThread(ctx, threadId, user._id);
+    }
+
+    for (const threadId of uniqueThreadIds) {
+      const messages = await ctx.db
+        .query("messages")
+        .withIndex("by_threadId_createdAt", (q) => q.eq("threadId", threadId))
+        .collect();
+
+      for (const message of messages) {
+        for (const attachment of message.attachments ?? []) {
+          await ctx.storage.delete(attachment.storageId);
+        }
+
+        await ctx.db.delete(message._id);
+      }
+
+      await ctx.db.delete(threadId);
+    }
+
+    return {
+      deletedCount: uniqueThreadIds.length,
     };
   },
 });

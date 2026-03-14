@@ -3,11 +3,30 @@ import { Textarea } from "@based-chat/ui/components/textarea";
 import { cn } from "@based-chat/ui/lib/utils";
 import { ArrowUp, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+
+import type {
+  AttachmentUploadHandlers,
+  DraftAttachment,
+} from "@/lib/attachments";
+import {
+  MAX_ATTACHMENTS,
+  prepareDraftAttachments,
+  revokeComposerAttachmentPreview,
+} from "@/lib/attachments";
 import type { Model } from "@/lib/models";
+
+import ChatAttachmentStrip from "./chat-attachment-strip";
 import ModelSelector from "./model-selector";
 
 const MIN_TEXTAREA_HEIGHT = 96;
 const MAX_TEXTAREA_HEIGHT = 240;
+
+function revokeDraftAttachments(attachments: DraftAttachment[]) {
+  for (const attachment of attachments) {
+    revokeComposerAttachmentPreview(attachment);
+  }
+}
 
 export default function ChatInput({
   model,
@@ -17,19 +36,52 @@ export default function ChatInput({
   onValueChange,
   disabled = false,
   className,
+  resetKey,
 }: {
   model: Model;
   onModelChange: (model: Model) => void;
-  onSend?: (message: string) => void | Promise<void>;
+  onSend?: (
+    message: string,
+    attachments: DraftAttachment[],
+    uploadHandlers?: AttachmentUploadHandlers,
+  ) => void | Promise<void>;
   value?: string;
   onValueChange?: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  resetKey?: string;
 }) {
   const [internalValue, setInternalValue] = useState("");
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgressById, setUploadProgressById] = useState<
+    Record<string, number>
+  >({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentsRef = useRef<DraftAttachment[]>([]);
   const currentValue = value ?? internalValue;
+  const canSend = currentValue.trim().length > 0 || attachments.length > 0;
+  const overallUploadProgress =
+    attachments.length > 0
+      ? Math.round(
+          attachments.reduce(
+            (total, attachment) =>
+              total + (uploadProgressById[attachment.id] ?? 0),
+            0,
+          ) / attachments.length,
+        )
+      : 0;
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
+    return () => {
+      revokeDraftAttachments(attachmentsRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -57,22 +109,85 @@ export default function ChatInput({
     [onValueChange],
   );
 
+  const clearAttachments = useCallback(() => {
+    setAttachments((currentAttachments) => {
+      revokeDraftAttachments(currentAttachments);
+      return [];
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isSubmitting) {
+      return;
+    }
+
+    clearAttachments();
+    setUploadProgressById({});
+  }, [clearAttachments, isSubmitting, resetKey]);
+
+  const addAttachmentFiles = useCallback((files: File[]) => {
+    const result = prepareDraftAttachments(attachments, files);
+
+    if (result.blockedCount > 0) {
+      toast.error("Compressed files like zip, rar, or archive bundles are not allowed.");
+    }
+
+    if (result.overLimitCount > 0) {
+      toast.error(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
+    }
+
+    if (result.attachments.length === 0) {
+      return;
+    }
+
+    setAttachments((currentAttachments) => [
+      ...currentAttachments,
+      ...result.attachments,
+    ]);
+  }, [attachments]);
+
   const handleSend = useCallback(async () => {
-    if (disabled || isSubmitting || !currentValue.trim()) return;
+    if (disabled || isSubmitting || !canSend) return;
 
     setIsSubmitting(true);
+    setUploadProgressById(
+      Object.fromEntries(attachments.map((attachment) => [attachment.id, 0])),
+    );
 
     try {
-      await onSend?.(currentValue.trim());
+      await onSend?.(currentValue.trim(), attachments, {
+        onUploadProgress: (attachmentId, progress) => {
+          setUploadProgressById((currentProgress) => ({
+            ...currentProgress,
+            [attachmentId]: progress,
+          }));
+        },
+      });
       setValue("");
+      clearAttachments();
+      setUploadProgressById({});
       if (textareaRef.current) {
         textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
         textareaRef.current.style.overflowY = "hidden";
       }
+    } catch (error) {
+      setUploadProgressById({});
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send message.",
+      );
     } finally {
       setIsSubmitting(false);
     }
-  }, [currentValue, disabled, isSubmitting, onSend, setValue]);
+  }, [
+    attachments,
+    canSend,
+    clearAttachments,
+    currentValue,
+    disabled,
+    isSubmitting,
+    onSend,
+    setValue,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -97,10 +212,74 @@ export default function ChatInput({
       textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
   }, []);
 
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setAttachments((currentAttachments) => {
+      const attachmentToRemove = currentAttachments.find(
+        (attachment) => attachment.id === attachmentId,
+      );
+
+      if (attachmentToRemove) {
+        revokeComposerAttachmentPreview(attachmentToRemove);
+      }
+
+      return currentAttachments.filter(
+        (attachment) => attachment.id !== attachmentId,
+      );
+    });
+
+    setSelectedPreviewId((currentSelectedPreviewId) =>
+      currentSelectedPreviewId === attachmentId ? null : currentSelectedPreviewId,
+    );
+  }, []);
+
+  const handleFileSelection = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      addAttachmentFiles(Array.from(event.target.files ?? []));
+      event.target.value = "";
+    },
+    [addAttachmentFiles],
+  );
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const pastedFiles = Array.from(event.clipboardData.items)
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+
+      if (pastedFiles.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      addAttachmentFiles(pastedFiles);
+    },
+    [addAttachmentFiles],
+  );
+
   return (
     <div className={cn("w-full shrink-0", className)}>
       <div className="mx-auto max-w-3xl px-4 pb-4">
         <div className="rounded-2xl border border-border/60 bg-card/50 backdrop-blur-sm transition-colors focus-within:border-primary/30 focus-within:bg-card">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileSelection}
+          />
+
+          {attachments.length > 0 ? (
+            <div className="border-b border-border/40 px-4 pt-4">
+              <ChatAttachmentStrip
+                attachments={attachments}
+                onRemove={removeAttachment}
+                isBusy={isSubmitting}
+                progressById={uploadProgressById}
+              />
+            </div>
+          ) : null}
+
           <div className="px-4 pt-3.5">
             <Textarea
               ref={textareaRef}
@@ -108,6 +287,7 @@ export default function ChatInput({
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={handleKeyDown}
               onInput={handleInput}
+              onPaste={handlePaste}
               disabled={disabled || isSubmitting}
               placeholder="Send a message..."
               rows={1}
@@ -117,21 +297,32 @@ export default function ChatInput({
           <div className="flex items-center justify-between border-t border-border/40 px-3 py-2.5">
             <div className="flex items-center gap-2">
               <Button
+                type="button"
                 variant="ghost"
                 size="icon-sm"
                 className="text-muted-foreground hover:text-foreground"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSubmitting}
               >
                 <Paperclip className="size-4" />
               </Button>
               <ModelSelector model={model} onModelChange={onModelChange} />
+              {isSubmitting && attachments.length > 0 ? (
+                <div className="rounded-full border border-border/50 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground">
+                  {overallUploadProgress < 100
+                    ? `Uploading ${overallUploadProgress}%`
+                    : "Sending message..."}
+                </div>
+              ) : null}
             </div>
             <Button
+              type="button"
               size="icon-sm"
               onClick={() => void handleSend()}
-              disabled={disabled || isSubmitting || !currentValue.trim()}
+              disabled={disabled || isSubmitting || !canSend}
               className={cn(
                 "transition-all",
-                !disabled && !isSubmitting && currentValue.trim()
+                !disabled && !isSubmitting && canSend
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground",
               )}
@@ -144,6 +335,7 @@ export default function ChatInput({
           Based Chat may produce inaccurate information. Verify important details.
         </p>
       </div>
+
     </div>
   );
 }

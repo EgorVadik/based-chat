@@ -1,5 +1,6 @@
-import type { Doc, Id } from "@based-chat/backend/convex/_generated/dataModel";
+import type { Id } from "@based-chat/backend/convex/_generated/dataModel";
 
+import type { MessageAttachment } from "@/lib/attachments";
 import { getModelById, type Model } from "@/lib/models";
 
 export type MessageRole = "user" | "system";
@@ -9,6 +10,7 @@ export type ChatMessage = {
   threadId?: Id<"threads">;
   role: MessageRole;
   content: string;
+  attachments: MessageAttachment[];
   modelId?: string;
   model?: Model;
   createdAt: number;
@@ -16,14 +18,28 @@ export type ChatMessage = {
   isStreaming?: boolean;
 };
 
-export function toChatMessage(message: Doc<"messages">): ChatMessage {
+type MessageLike = {
+  _id: Id<"messages">;
+  threadId: Id<"threads">;
+  role: MessageRole;
+  content: string;
+  attachments?: MessageAttachment[];
+  modelId?: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+
+export function toChatMessage(
+  message: MessageLike,
+): ChatMessage {
   return {
     id: message._id,
     threadId: message.threadId,
     role: message.role,
     content: message.content,
+    attachments: message.attachments ?? [],
     modelId: message.modelId,
-    model: getModelById(message.modelId),
+    model: message.modelId ? getModelById(message.modelId) : undefined,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
   };

@@ -19,6 +19,12 @@ import {
 
 import AppSidebar from "@/components/chat/app-sidebar";
 import ChatArea from "@/components/chat/chat-area";
+import type {
+  AttachmentUploadHandlers,
+  ComposerAttachment,
+  DraftAttachment,
+  MessageAttachment,
+} from "@/lib/attachments";
 import Loader from "@/components/loader";
 import { toChatMessage, type ChatMessage } from "@/lib/chat";
 import { DEFAULT_MODEL, getModelById, type Model } from "@/lib/models";
@@ -56,15 +62,46 @@ Ship this API in three phases. Start with internal traffic, move to a limited be
 
 This streamed mock is local-only for now, but it behaves like an actual assistant response so we can test incremental rendering on real backend threads.`;
 
-function deriveThreadTitle(content: string) {
+function deriveThreadTitle(
+  content: string,
+  attachments: Pick<{ fileName: string }, "fileName">[] = [],
+) {
   const normalized = content.trim().replace(/\s+/g, " ");
 
-  if (normalized.length <= 60) {
+  if (normalized.length > 0 && normalized.length <= 60) {
     return normalized;
   }
 
-  return `${normalized.slice(0, 57).trimEnd()}...`;
+  if (normalized.length > 0) {
+    return `${normalized.slice(0, 57).trimEnd()}...`;
+  }
+
+  if (attachments.length === 1) {
+    return attachments[0]!.fileName || "Shared image";
+  }
+
+  if (attachments.length > 1) {
+    return `${attachments.length} shared images`;
+  }
+
+  return "New chat";
 }
+
+type PersistedMessagePayload = {
+  _id: Id<"messages">;
+  threadId: Id<"threads">;
+  role: ChatMessage["role"];
+  content: string;
+  attachments?: MessageAttachment[];
+  modelId: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+
+type EditedMessagePayload = {
+  updatedMessage: PersistedMessagePayload;
+  deletedMessageIds: string[];
+};
 
 function HomeComponent() {
   const convex = useConvex();
@@ -80,9 +117,17 @@ function HomeComponent() {
     { initialNumItems: THREAD_PAGE_SIZE },
   );
   const createThread = useMutation(api.threads.create);
-  const createMessage = useMutation(api.messages.create);
-  const editMessage = useMutation(api.messages.edit);
+  const createMessage = useMutation(
+    (api.messages as { create: any }).create,
+  );
+  const editMessage = useMutation(
+    (api.messages as { edit: any }).edit,
+  );
   const createSystemReply = useMutation(api.messages.createSystemReply);
+  const generateAttachmentUploadUrl = useMutation(
+    (api.messages as { generateAttachmentUploadUrl: any })
+      .generateAttachmentUploadUrl,
+  );
   const [activeThreadId, setActiveThreadId] = useState<ThreadSummary["_id"] | null>(
     null,
   );
@@ -239,6 +284,7 @@ function HomeComponent() {
         threadId,
         role: "system",
         content: "",
+        attachments: [],
         modelId: model.id,
         model,
         createdAt: seed,
@@ -264,6 +310,7 @@ function HomeComponent() {
           threadId,
           role: "system",
           content: nextContent,
+          attachments: [],
           modelId: model.id,
           model,
           createdAt: seed,
@@ -287,15 +334,19 @@ function HomeComponent() {
                 return;
               }
 
+              const typedSystemMessage =
+                createdSystemMessage as PersistedMessagePayload;
+
               appendCachedMessage(threadId, {
-                id: createdSystemMessage._id,
+                id: typedSystemMessage._id,
                 threadId,
                 role: "system",
                 content: FULL_SYSTEM_RESPONSE,
+                attachments: typedSystemMessage.attachments ?? [],
                 modelId: model.id,
                 model,
-                createdAt: createdSystemMessage.createdAt,
-                updatedAt: createdSystemMessage.updatedAt,
+                createdAt: typedSystemMessage.createdAt,
+                updatedAt: typedSystemMessage.updatedAt,
               });
             })
             .finally(() => {
@@ -366,10 +417,11 @@ function HomeComponent() {
       const prefetchPromise = convex
         .query(api.messages.listByThread, { threadId })
         .then((messages) => {
+          const typedMessages = messages as PersistedMessagePayload[];
           prefetchedThreadIdsRef.current.add(threadId);
           setMessageCache((currentCache) => ({
             ...currentCache,
-            [threadId]: messages.map(toChatMessage),
+            [threadId]: typedMessages.map(toChatMessage),
           }));
         })
         .finally(() => {
@@ -381,14 +433,85 @@ function HomeComponent() {
     [convex, messageCache],
   );
 
+  const uploadAttachments = useCallback(
+    async (
+      attachments: DraftAttachment[],
+      uploadHandlers?: AttachmentUploadHandlers,
+    ): Promise<MessageAttachment[]> => {
+      if (attachments.length === 0) {
+        return [];
+      }
+
+      return await Promise.all(
+        attachments.map(async (attachment) => {
+          const uploadUrl = (await generateAttachmentUploadUrl({})) as string;
+          const { storageId } = await new Promise<{ storageId: Id<"_storage"> }>(
+            (resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+
+              xhr.open("POST", uploadUrl);
+              xhr.setRequestHeader("Content-Type", attachment.contentType);
+
+              xhr.upload.addEventListener("progress", (event) => {
+                if (!event.lengthComputable) {
+                  return;
+                }
+
+                uploadHandlers?.onUploadProgress?.(
+                  attachment.id,
+                  Math.min(100, Math.round((event.loaded / event.total) * 100)),
+                );
+              });
+
+              xhr.addEventListener("load", () => {
+                if (xhr.status < 200 || xhr.status >= 300) {
+                  reject(new Error("Failed to upload image attachment."));
+                  return;
+                }
+
+                uploadHandlers?.onUploadProgress?.(attachment.id, 100);
+
+                try {
+                  resolve(JSON.parse(xhr.responseText) as { storageId: Id<"_storage"> });
+                } catch {
+                  reject(new Error("Failed to read uploaded attachment response."));
+                }
+              });
+
+              xhr.addEventListener("error", () => {
+                reject(new Error("Failed to upload image attachment."));
+              });
+
+              xhr.send(attachment.file);
+            },
+          );
+
+          return {
+            kind: attachment.kind,
+            storageId,
+            fileName: attachment.fileName,
+            contentType: attachment.contentType,
+            size: attachment.size,
+            url: null,
+          };
+        }),
+      );
+    },
+    [generateAttachmentUploadUrl],
+  );
+
   const handleSendMessage = useCallback(async (
     content: string,
+    attachments: DraftAttachment[],
+    uploadHandlers?: AttachmentUploadHandlers,
     options?: {
       modelOverride?: Model;
     },
   ) => {
     const trimmedContent = content.trim();
-    if (!trimmedContent) {
+    const draftAttachments = attachments;
+
+    if (!trimmedContent && draftAttachments.length === 0) {
       return;
     }
 
@@ -397,7 +520,7 @@ function HomeComponent() {
 
     if (!threadId) {
       const createdThread = (await createThread({
-        title: deriveThreadTitle(trimmedContent),
+        title: deriveThreadTitle(trimmedContent, draftAttachments),
       })) as ThreadSummary;
       threadId = createdThread._id;
       setActiveThreadId(createdThread._id);
@@ -411,18 +534,30 @@ function HomeComponent() {
       return;
     }
 
-    const createdUserMessage = await createMessage({
+    const uploadedAttachments = await uploadAttachments(
+      draftAttachments,
+      uploadHandlers,
+    );
+    const createdUserMessage = (await createMessage({
       threadId,
       role: "user",
       content: trimmedContent,
+      attachments: uploadedAttachments.map((attachment) => ({
+        kind: attachment.kind,
+        storageId: attachment.storageId,
+        fileName: attachment.fileName,
+        contentType: attachment.contentType,
+        size: attachment.size,
+      })),
       modelId: modelForMessage.id,
-    });
+    })) as PersistedMessagePayload;
 
     appendCachedMessage(threadId, {
       id: createdUserMessage._id,
       threadId,
       role: "user",
       content: trimmedContent,
+      attachments: createdUserMessage.attachments ?? uploadedAttachments,
       modelId: modelForMessage.id,
       model: modelForMessage,
       createdAt: createdUserMessage.createdAt,
@@ -443,6 +578,7 @@ function HomeComponent() {
     createThread,
     currentModel,
     startAssistantStream,
+    uploadAttachments,
   ]);
 
   const restartFromUserMessage = useCallback(
@@ -450,32 +586,42 @@ function HomeComponent() {
       message,
       content,
       nextModel,
+      attachments,
     }: {
       message: ChatMessage;
       content: string;
       nextModel: Model;
+      attachments: MessageAttachment[];
     }) => {
       const trimmedContent = content.trim();
       const threadId = message.threadId;
 
-      if (!trimmedContent || !threadId) {
+      if ((!trimmedContent && attachments.length === 0) || !threadId) {
         return;
       }
 
       stopStreamingForThread(threadId);
 
-      const editResult = await editMessage({
+      const editResult = (await editMessage({
         threadId,
         messageId: message.id as Id<"messages">,
         content: trimmedContent,
         modelId: nextModel.id,
-      });
+        attachments: attachments.map((attachment) => ({
+          kind: attachment.kind,
+          storageId: attachment.storageId,
+          fileName: attachment.fileName,
+          contentType: attachment.contentType,
+          size: attachment.size,
+        })),
+      })) as EditedMessagePayload;
 
       const updatedMessage: ChatMessage = {
         id: editResult.updatedMessage._id,
         threadId,
         role: "user",
         content: editResult.updatedMessage.content,
+        attachments: editResult.updatedMessage.attachments ?? attachments,
         modelId: nextModel.id,
         model: nextModel,
         createdAt: editResult.updatedMessage.createdAt,
@@ -516,7 +662,9 @@ function HomeComponent() {
       startAssistantStream({
         threadId,
         userMessageId: editResult.updatedMessage._id,
-        userMessageUpdatedAt: editResult.updatedMessage.updatedAt,
+        userMessageUpdatedAt:
+          editResult.updatedMessage.updatedAt ??
+          editResult.updatedMessage.createdAt,
         model: nextModel,
       });
     },
@@ -530,14 +678,37 @@ function HomeComponent() {
   );
 
   const handleEditMessage = useCallback(
-    async (message: ChatMessage, content: string, nextModel: Model) => {
+    async (
+      message: ChatMessage,
+      content: string,
+      nextModel: Model,
+      attachments: ComposerAttachment[],
+    ) => {
+      const uploadedAttachments = await uploadAttachments(
+        attachments.filter(
+          (attachment): attachment is DraftAttachment =>
+            attachment.source === "draft",
+        ),
+      );
+      const persistedAttachments = attachments
+        .filter((attachment) => attachment.source === "stored")
+        .map((attachment) => ({
+          kind: attachment.kind,
+          storageId: attachment.storageId,
+          fileName: attachment.fileName,
+          contentType: attachment.contentType,
+          size: attachment.size,
+          url: attachment.url,
+        }));
+
       await restartFromUserMessage({
         message,
         content,
         nextModel,
+        attachments: [...persistedAttachments, ...uploadedAttachments],
       });
     },
-    [restartFromUserMessage],
+    [restartFromUserMessage, uploadAttachments],
   );
 
   const handleRetryMessage = useCallback(
@@ -574,6 +745,7 @@ function HomeComponent() {
         message: sourceMessage,
         content: sourceMessage.content,
         nextModel: retryModel,
+        attachments: sourceMessage.attachments,
       });
     },
     [activeThreadId, currentModel, messageCache, persistedMessages, restartFromUserMessage],
@@ -610,7 +782,9 @@ function HomeComponent() {
           messages={activeMessages}
           model={currentModel}
           onModelChange={handleModelChange}
-          onSendMessage={handleSendMessage}
+          onSendMessage={(message, attachments, uploadHandlers) =>
+            handleSendMessage(message, attachments, uploadHandlers)
+          }
           onEditMessage={handleEditMessage}
           onRetryMessage={handleRetryMessage}
           isStreaming={Boolean(
