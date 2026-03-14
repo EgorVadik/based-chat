@@ -226,10 +226,6 @@ export default function ChatInput({
         (attachment) => attachment.id !== attachmentId,
       );
     });
-
-    setSelectedPreviewId((currentSelectedPreviewId) =>
-      currentSelectedPreviewId === attachmentId ? null : currentSelectedPreviewId,
-    );
   }, []);
 
   const handleFileSelection = useCallback(
