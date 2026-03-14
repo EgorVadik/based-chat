@@ -1,50 +1,37 @@
-import { api } from "@based-chat/backend/convex/_generated/api";
+import { SidebarInset, SidebarProvider } from "@based-chat/ui/components/sidebar";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useCallback, useState } from "react";
+import AppSidebar from "@/components/chat/app-sidebar";
+import ChatArea from "@/components/chat/chat-area";
+import { CONVERSATIONS, MODELS } from "@/lib/fake-data";
 
 export const Route = createFileRoute("/")({
   component: HomeComponent,
 });
 
-const TITLE_TEXT = `
- ██████╗ ███████╗████████╗████████╗███████╗██████╗
- ██╔══██╗██╔════╝╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗
- ██████╔╝█████╗     ██║      ██║   █████╗  ██████╔╝
- ██╔══██╗██╔══╝     ██║      ██║   ██╔══╝  ██╔══██╗
- ██████╔╝███████╗   ██║      ██║   ███████╗██║  ██║
- ╚═════╝ ╚══════╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝
-
- ████████╗    ███████╗████████╗ █████╗  ██████╗██╗  ██╗
- ╚══██╔══╝    ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
-    ██║       ███████╗   ██║   ███████║██║     █████╔╝
-    ██║       ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
-    ██║       ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
-    ╚═╝       ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
- `;
-
 function HomeComponent() {
-  const healthCheck = useQuery(api.healthCheck.get);
+  const [activeId, setActiveId] = useState<string | null>("conv-1");
+
+  const activeConversation =
+    CONVERSATIONS.find((c) => c.id === activeId) ?? null;
+
+  const currentModel = activeConversation?.model ?? MODELS[0]!;
+
+  const handleNewChat = useCallback(() => {
+    setActiveId(null);
+  }, []);
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-2">
-      <pre className="overflow-x-auto font-mono text-sm">{TITLE_TEXT}</pre>
-      <div className="grid gap-6">
-        <section className="rounded-lg border p-4">
-          <h2 className="mb-2 font-medium">API Status</h2>
-          <div className="flex items-center gap-2">
-            <div
-              className={`h-2 w-2 rounded-full ${healthCheck === "OK" ? "bg-green-500" : healthCheck === undefined ? "bg-orange-400" : "bg-red-500"}`}
-            />
-            <span className="text-sm text-muted-foreground">
-              {healthCheck === undefined
-                ? "Checking..."
-                : healthCheck === "OK"
-                  ? "Connected"
-                  : "Error"}
-            </span>
-          </div>
-        </section>
-      </div>
-    </div>
+    <SidebarProvider>
+      <AppSidebar
+        conversations={CONVERSATIONS}
+        activeConversationId={activeId}
+        onSelectConversation={setActiveId}
+        onNewChat={handleNewChat}
+      />
+      <SidebarInset>
+        <ChatArea conversation={activeConversation} model={currentModel} />
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
