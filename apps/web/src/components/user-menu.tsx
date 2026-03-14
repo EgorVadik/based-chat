@@ -9,14 +9,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@based-chat/ui/components/dropdown-menu";
-import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
+import { toast } from "sonner";
 
 import { authClient } from "@/lib/auth-client";
 
 export default function UserMenu() {
-  const navigate = useNavigate();
-  const user = useQuery(api.auth.getCurrentUser);
+  const { isAuthenticated } = useConvexAuth();
+  const user = useQuery(api.auth.getCurrentUser, isAuthenticated ? {} : "skip");
 
   return (
     <DropdownMenu>
@@ -32,9 +32,10 @@ export default function UserMenu() {
               authClient.signOut({
                 fetchOptions: {
                   onSuccess: () => {
-                    navigate({
-                      to: "/dashboard",
-                    });
+                    toast.success("Signed out.");
+                  },
+                  onError: (error) => {
+                    toast.error(error.error.message || error.error.statusText);
                   },
                 },
               });

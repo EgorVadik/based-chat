@@ -12,6 +12,7 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "@based-chat/ui/components/sidebar";
+import { Input } from "@based-chat/ui/components/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,8 +31,11 @@ import {
   MessageSquare,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
+
 import type { Conversation } from "@/lib/fake-data";
 import { getConversationsByTimeGroup } from "@/lib/fake-data";
+import { authClient } from "@/lib/auth-client";
 
 function BrandMark() {
   return (
@@ -73,13 +77,26 @@ export default function AppSidebar({
   activeConversationId,
   onSelectConversation,
   onNewChat,
+  user,
 }: {
   conversations: Conversation[];
   activeConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onNewChat: () => void;
+  user: {
+    name?: string | null;
+    email?: string | null;
+  };
 }) {
   const groups = getConversationsByTimeGroup(conversations);
+  const displayName = user.name?.trim() || user.email?.split("@")[0] || "Signed in";
+  const displayEmail = user.email || "No email available";
+  const initials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "BC";
 
   return (
     <Sidebar>
@@ -97,10 +114,9 @@ export default function AppSidebar({
         </div>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-          <input
-            type="text"
+          <Input
             placeholder="Search conversations..."
-            className="w-full rounded-lg bg-sidebar-accent/50 border-0 pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground/40 focus:outline-none focus:bg-sidebar-accent transition-colors"
+            className="h-8 rounded-lg border-0 bg-sidebar-accent/50 pl-8 text-xs shadow-none placeholder:text-muted-foreground/40 focus-visible:bg-sidebar-accent focus-visible:ring-0 dark:bg-sidebar-accent/60"
           />
         </div>
       </SidebarHeader>
@@ -155,13 +171,13 @@ export default function AppSidebar({
               <button className="flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left hover:bg-sidebar-accent transition-colors">
                 <Avatar size="sm">
                   <AvatarFallback className="bg-primary/15 text-primary text-[10px] font-semibold">
-                    AT
+                    {initials}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate">Ali Tamer</p>
+                  <p className="text-xs font-medium truncate">{displayName}</p>
                   <p className="text-[10px] text-muted-foreground truncate">
-                    ali@based.chat
+                    {displayEmail}
                   </p>
                 </div>
                 <ChevronsUpDown className="size-3.5 text-muted-foreground" />
@@ -179,7 +195,21 @@ export default function AppSidebar({
               <span>Feedback</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive">
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => {
+                authClient.signOut({
+                  fetchOptions: {
+                    onSuccess: () => {
+                      toast.success("Signed out.");
+                    },
+                    onError: (error) => {
+                      toast.error(error.error.message || error.error.statusText);
+                    },
+                  },
+                });
+              }}
+            >
               <LogOut className="size-3.5" />
               <span>Sign out</span>
             </DropdownMenuItem>

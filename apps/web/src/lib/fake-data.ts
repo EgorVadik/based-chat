@@ -31,7 +31,6 @@ export type Conversation = {
 };
 
 export const PROVIDERS = [
-  { id: "all", name: "All" },
   { id: "Anthropic", name: "Anthropic" },
   { id: "OpenAI", name: "OpenAI" },
   { id: "Google", name: "Google" },

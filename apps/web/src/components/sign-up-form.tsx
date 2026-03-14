@@ -1,37 +1,57 @@
 import { Button } from "@based-chat/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@based-chat/ui/components/card";
 import { Input } from "@based-chat/ui/components/input";
 import { Label } from "@based-chat/ui/components/label";
+import { cn } from "@based-chat/ui/lib/utils";
 import { useForm } from "@tanstack/react-form";
-import { useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
+import { ArrowRight, KeyRound, Mail, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import z from "zod";
 
 import { authClient } from "@/lib/auth-client";
 
-export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () => void }) {
-  const navigate = useNavigate({
-    from: "/",
-  });
+function getErrorMessage(error: string | { message?: string } | undefined) {
+  return typeof error === "string" ? error : error?.message;
+}
 
+function FieldError({
+  errors,
+}: {
+  errors: Array<string | { message?: string } | undefined>;
+}) {
+  if (!errors.length) return null;
+
+  return (
+    <p className="text-[11px] font-medium text-destructive">
+      {getErrorMessage(errors[0])}
+    </p>
+  );
+}
+
+export default function SignUpForm() {
   const form = useForm({
     defaultValues: {
+      name: "",
       email: "",
       password: "",
-      name: "",
     },
     onSubmit: async ({ value }) => {
       await authClient.signUp.email(
         {
+          name: value.name,
           email: value.email,
           password: value.password,
-          name: value.name,
         },
         {
           onSuccess: () => {
-            navigate({
-              to: "/dashboard",
-            });
-            toast.success("Sign up successful");
+            toast.success("Account created.");
           },
           onError: (error) => {
             toast.error(error.error.message || error.error.statusText);
@@ -42,112 +62,143 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
     validators: {
       onSubmit: z.object({
         name: z.string().min(2, "Name must be at least 2 characters"),
-        email: z.email("Invalid email address"),
+        email: z.string().email("Enter a valid email address"),
         password: z.string().min(8, "Password must be at least 8 characters"),
       }),
     },
   });
 
   return (
-    <div className="mx-auto w-full mt-10 max-w-md p-6">
-      <h1 className="mb-6 text-center text-3xl font-bold">Create Account</h1>
+    <Card className="overflow-hidden rounded-3xl border border-border/60 bg-card/90 py-0 shadow-xl shadow-black/5 backdrop-blur-sm dark:shadow-black/30">
+      <CardHeader className="border-b border-border/50 px-6 py-6">
+        <CardTitle className="text-2xl font-semibold tracking-tight">
+          Create account
+        </CardTitle>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Set up your account to start using Based Chat.
+        </p>
+      </CardHeader>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          form.handleSubmit();
-        }}
-        className="space-y-4"
-      >
-        <div>
+      <CardContent className="px-6 py-6">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            form.handleSubmit();
+          }}
+          className="space-y-4"
+        >
           <form.Field name="name">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Name</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
+                <Label htmlFor={field.name} className="text-[11px] uppercase tracking-[0.22em]">
+                  Display name
+                </Label>
+                <div className="relative">
+                  <UserRound className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/60" />
+                  <Input
+                    id={field.name}
+                    name={field.name}
+                    autoComplete="name"
+                    placeholder="Your name"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    className="h-12 rounded-xl border-border/60 bg-background/70 pl-9 text-sm shadow-none dark:bg-input/20"
+                  />
+                </div>
+                <FieldError errors={field.state.meta.errors} />
               </div>
             )}
           </form.Field>
-        </div>
 
-        <div>
           <form.Field name="email">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Email</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="email"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
+                <Label htmlFor={field.name} className="text-[11px] uppercase tracking-[0.22em]">
+                  Email
+                </Label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/60" />
+                  <Input
+                    id={field.name}
+                    name={field.name}
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    className="h-12 rounded-xl border-border/60 bg-background/70 pl-9 text-sm shadow-none dark:bg-input/20"
+                  />
+                </div>
+                <FieldError errors={field.state.meta.errors} />
               </div>
             )}
           </form.Field>
-        </div>
 
-        <div>
           <form.Field name="password">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Password</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="password"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor={field.name}
+                    className="text-[11px] uppercase tracking-[0.22em]"
+                  >
+                    Password
+                  </Label>
+                  <span className="text-[11px] text-muted-foreground">
+                    Use 8+ characters
+                  </span>
+                </div>
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/60" />
+                  <Input
+                    id={field.name}
+                    name={field.name}
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="Create a password"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    className="h-12 rounded-xl border-border/60 bg-background/70 pl-9 text-sm shadow-none dark:bg-input/20"
+                  />
+                </div>
+                <FieldError errors={field.state.meta.errors} />
               </div>
             )}
           </form.Field>
-        </div>
 
-        <form.Subscribe
-          selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
-        >
-          {({ canSubmit, isSubmitting }) => (
-            <Button type="submit" className="w-full" disabled={!canSubmit || isSubmitting}>
-              {isSubmitting ? "Submitting..." : "Sign Up"}
-            </Button>
-          )}
-        </form.Subscribe>
-      </form>
+          <form.Subscribe
+            selector={(state) => ({
+              canSubmit: state.canSubmit,
+              isSubmitting: state.isSubmitting,
+            })}
+          >
+            {({ canSubmit, isSubmitting }) => (
+              <Button
+                type="submit"
+                disabled={!canSubmit || isSubmitting}
+                className={cn("h-12 w-full rounded-xl text-sm", isSubmitting && "animate-pulse")}
+              >
+                {isSubmitting ? "Creating account..." : "Create account"}
+                {!isSubmitting && <ArrowRight className="size-4" />}
+              </Button>
+            )}
+          </form.Subscribe>
+        </form>
+      </CardContent>
 
-      <div className="mt-4 text-center">
-        <Button
-          variant="link"
-          onClick={onSwitchToSignIn}
-          className="text-indigo-600 hover:text-indigo-800"
+      <CardFooter className="border-t border-border/50 px-6 py-4 text-xs text-muted-foreground">
+        Already have an account?
+        <Link
+          to="/sign-in"
+          className="ml-1 font-medium text-primary transition-colors hover:text-primary/80"
         >
-          Already have an account? Sign In
-        </Button>
-      </div>
-    </div>
+          Sign in
+        </Link>
+      </CardFooter>
+    </Card>
   );
 }
