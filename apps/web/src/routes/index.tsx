@@ -1,5 +1,6 @@
 import { api } from "@based-chat/backend/convex/_generated/api";
 import type { Id } from "@based-chat/backend/convex/_generated/dataModel";
+import { env } from "@based-chat/env/web";
 import { SidebarInset, SidebarProvider } from "@based-chat/ui/components/sidebar";
 import { Navigate, createFileRoute } from "@tanstack/react-router";
 import {
@@ -9,22 +10,16 @@ import {
   usePaginatedQuery,
   useQuery,
 } from "convex/react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import AppSidebar from "@/components/chat/app-sidebar";
-import ChatArea from "@/components/chat/chat-area";
 import type {
   AttachmentUploadHandlers,
   ComposerAttachment,
   DraftAttachment,
   MessageAttachment,
 } from "@/lib/attachments";
+import AppSidebar from "@/components/chat/app-sidebar";
+import ChatArea from "@/components/chat/chat-area";
 import Loader from "@/components/loader";
 import { toChatMessage, type ChatMessage } from "@/lib/chat";
 import { DEFAULT_MODEL, getModelById, type Model } from "@/lib/models";
@@ -35,32 +30,6 @@ export const Route = createFileRoute("/")({
 });
 
 const THREAD_PAGE_SIZE = 20;
-const STREAM_INTERVAL_MS = 90;
-const STREAM_TARGET_CHUNKS = 100;
-const FULL_SYSTEM_RESPONSE = `Absolutely. Here is a realistic rollout response we can stream into the UI.
-
-## Rollout plan
-
-Ship this API in three phases. Start with internal traffic, move to a limited beta cohort, and only open it broadly after latency and error rates stay stable for a full monitoring window.
-
-## Guardrails
-
-- Apply per-user and per-IP rate limits.
-- Add structured logs with request ids.
-- Emit metrics for latency, retries, and 5xx responses.
-- Separate validation failures from unexpected server errors.
-
-## Deployment checklist
-
-1. Verify smoke tests and health checks in staging.
-2. Turn on dashboards and tracing before traffic shifts.
-3. Release behind a flag for the first cohort.
-4. Watch p95 latency, throughput, and error spikes.
-5. Keep rollback steps and owner handoff notes ready.
-
-## Notes
-
-This streamed mock is local-only for now, but it behaves like an actual assistant response so we can test incremental rendering on real backend threads.`;
 
 function deriveThreadTitle(
   content: string,
@@ -94,6 +63,9 @@ type PersistedMessagePayload = {
   content: string;
   attachments?: MessageAttachment[];
   modelId: string;
+  streamId?: string;
+  streamStatus?: ChatMessage["streamStatus"];
+  errorMessage?: string;
   createdAt: number;
   updatedAt?: number;
 };
@@ -117,13 +89,11 @@ function HomeComponent() {
     { initialNumItems: THREAD_PAGE_SIZE },
   );
   const createThread = useMutation(api.threads.create);
-  const createMessage = useMutation(
-    (api.messages as { create: any }).create,
+  const createMessage = useMutation((api.messages as { create: any }).create);
+  const editMessage = useMutation((api.messages as { edit: any }).edit);
+  const createAssistantReply = useMutation(
+    (api.messages as { createAssistantReply: any }).createAssistantReply,
   );
-  const editMessage = useMutation(
-    (api.messages as { edit: any }).edit,
-  );
-  const createSystemReply = useMutation(api.messages.createSystemReply);
   const generateAttachmentUploadUrl = useMutation(
     (api.messages as { generateAttachmentUploadUrl: any })
       .generateAttachmentUploadUrl,
@@ -134,19 +104,16 @@ function HomeComponent() {
   const [streamingThreadIds, setStreamingThreadIds] = useState<
     ThreadSummary["_id"][]
   >([]);
+  const [drivenStreamMessageIds, setDrivenStreamMessageIds] = useState<string[]>(
+    [],
+  );
   const [messageCache, setMessageCache] = useState<
     Record<string, ChatMessage[] | undefined>
-  >({});
-  const [streamingDrafts, setStreamingDrafts] = useState<
-    Record<string, ChatMessage | undefined>
   >({});
   const [selectedModel, setSelectedModel] = useState<Model>(DEFAULT_MODEL);
   const persistedMessages = useQuery(
     api.messages.listByThread,
     isAuthenticated && activeThreadId ? { threadId: activeThreadId } : "skip",
-  );
-  const streamingTimersRef = useRef(
-    new Map<ThreadSummary["_id"], ReturnType<typeof setInterval>>(),
   );
   const prefetchedThreadIdsRef = useRef(new Set<ThreadSummary["_id"]>());
   const prefetchPromisesRef = useRef(
@@ -154,11 +121,14 @@ function HomeComponent() {
   );
 
   const activeThread = useMemo(
-    () =>
-      threads?.find((thread) => thread._id === activeThreadId) ?? null,
+    () => threads?.find((thread) => thread._id === activeThreadId) ?? null,
     [activeThreadId, threads],
   );
   const currentModel = selectedModel;
+  const streamUrl = useMemo(
+    () => new URL("/messages/stream", env.VITE_CONVEX_SITE_URL),
+    [],
+  );
 
   useEffect(() => {
     if (!activeThreadId || persistedMessages === undefined) {
@@ -167,68 +137,66 @@ function HomeComponent() {
 
     setMessageCache((currentCache) => ({
       ...currentCache,
-      [activeThreadId]: persistedMessages.map(toChatMessage),
+      [activeThreadId]: (persistedMessages as PersistedMessagePayload[]).map(
+        toChatMessage,
+      ),
     }));
   }, [activeThreadId, persistedMessages]);
 
-  const activeMessages = useMemo(() => {
-    const messages =
+  const activeMessages = useMemo(
+    () =>
       (activeThreadId ? messageCache[activeThreadId] : undefined) ??
-      (persistedMessages ? persistedMessages.map(toChatMessage) : []) ??
-      [];
-    const draft = activeThreadId ? streamingDrafts[activeThreadId] : undefined;
+      ((persistedMessages as PersistedMessagePayload[] | undefined)?.map(
+        toChatMessage,
+      ) ??
+        []),
+    [activeThreadId, messageCache, persistedMessages],
+  );
 
-    return draft ? [...messages, draft] : messages;
-  }, [activeThreadId, messageCache, persistedMessages, streamingDrafts]);
+  useEffect(() => {
+    if (!activeThreadId) {
+      setDrivenStreamMessageIds([]);
+      setStreamingThreadIds([]);
+      return;
+    }
 
-  const clearStreamingDraft = useCallback((
-    threadId: ThreadSummary["_id"],
-    messageId?: string,
-  ) => {
-    setStreamingDrafts((currentDrafts) => {
-      const currentDraft = currentDrafts[threadId];
+    const activeMessageIds = new Set(activeMessages.map((message) => message.id));
+    setDrivenStreamMessageIds((currentMessageIds) =>
+      currentMessageIds.filter((messageId) => activeMessageIds.has(messageId)),
+    );
+    setStreamingThreadIds((currentThreadIds) =>
+      currentThreadIds.filter((threadId) => threadId === activeThreadId),
+    );
+  }, [activeMessages, activeThreadId]);
 
-      if (!currentDraft) {
-        return currentDrafts;
-      }
+  const getThreadMessages = useCallback(
+    (threadId: ThreadSummary["_id"]) =>
+      messageCache[threadId] ??
+      (threadId === activeThreadId
+        ? ((persistedMessages as PersistedMessagePayload[] | undefined)?.map(
+            toChatMessage,
+          ) ?? [])
+        : []),
+    [activeThreadId, messageCache, persistedMessages],
+  );
 
-      if (messageId && currentDraft.id !== messageId) {
-        return currentDrafts;
-      }
-
-      const nextDrafts = { ...currentDrafts };
-      delete nextDrafts[threadId];
-      return nextDrafts;
-    });
-  }, []);
-
-  const upsertStreamingDraft = useCallback(
+  const appendCachedMessage = useCallback(
     (threadId: ThreadSummary["_id"], message: ChatMessage) => {
-      setStreamingDrafts((currentDrafts) => ({
-        ...currentDrafts,
-        [threadId]: message,
-      }));
+      setMessageCache((currentCache) => {
+        const currentMessages = currentCache[threadId] ?? [];
+
+        if (currentMessages.some((currentMessage) => currentMessage.id === message.id)) {
+          return currentCache;
+        }
+
+        return {
+          ...currentCache,
+          [threadId]: [...currentMessages, message],
+        };
+      });
     },
     [],
   );
-
-  const appendCachedMessage = useCallback((
-    threadId: ThreadSummary["_id"],
-    message: ChatMessage,
-  ) => {
-    setMessageCache((currentCache) => {
-      const currentMessages = currentCache[threadId] ?? [];
-
-      if (currentMessages.some((currentMessage) => currentMessage.id === message.id)) {
-        return currentCache;
-      }
-
-      return {
-        ...currentCache,
-        [threadId]: [...currentMessages, message],
-      };
-    });
-  }, []);
 
   const addStreamingThread = useCallback((threadId: ThreadSummary["_id"]) => {
     setStreamingThreadIds((currentThreadIds) =>
@@ -244,138 +212,62 @@ function HomeComponent() {
     );
   }, []);
 
-  const stopStreamingForThread = useCallback(
-    (threadId: ThreadSummary["_id"]) => {
-      const timer = streamingTimersRef.current.get(threadId);
+  const markDrivenStreamMessage = useCallback((
+    threadId: ThreadSummary["_id"],
+    messageId: string,
+  ) => {
+    addStreamingThread(threadId);
+    setDrivenStreamMessageIds((currentMessageIds) =>
+      currentMessageIds.includes(messageId)
+        ? currentMessageIds
+        : [...currentMessageIds, messageId],
+    );
+  }, [addStreamingThread]);
 
-      if (timer) {
-        clearInterval(timer);
-        streamingTimersRef.current.delete(threadId);
-      }
+  const finalizeDrivenStreamMessage = useCallback((
+    threadId: ThreadSummary["_id"],
+    messageId: string,
+  ) => {
+    removeStreamingThread(threadId);
+    setDrivenStreamMessageIds((currentMessageIds) =>
+      currentMessageIds.filter((currentMessageId) => currentMessageId !== messageId),
+    );
+  }, [removeStreamingThread]);
 
-      removeStreamingThread(threadId);
-      clearStreamingDraft(threadId);
-    },
-    [clearStreamingDraft, removeStreamingThread],
-  );
+  const handleStreamStatusChange = useCallback((
+    threadId: ThreadSummary["_id"] | undefined,
+    messageId: string,
+    status: ChatMessage["streamStatus"],
+  ) => {
+    if (!threadId || !status) {
+      return;
+    }
 
-  const startAssistantStream = useCallback(
-    ({
-      threadId,
-      userMessageId,
-      userMessageUpdatedAt,
-      model,
-    }: {
-      threadId: ThreadSummary["_id"];
-      userMessageId: Id<"messages">;
-      userMessageUpdatedAt: number;
-      model: Model;
-    }) => {
-      if (streamingTimersRef.current.has(threadId)) {
-        return;
-      }
-
-      const seed = Date.now();
-      const draftMessageId = `msg-stream-${seed}`;
-
-      addStreamingThread(threadId);
-      upsertStreamingDraft(threadId, {
-        id: draftMessageId,
-        threadId,
-        role: "system",
-        content: "",
-        attachments: [],
-        modelId: model.id,
-        model,
-        createdAt: seed,
-        isStreaming: true,
-      });
-
-      let visibleLength = 0;
-      const chunkSize = Math.max(
-        6,
-        Math.floor(FULL_SYSTEM_RESPONSE.length / STREAM_TARGET_CHUNKS),
-      );
-
-      const timer = setInterval(() => {
-        visibleLength = Math.min(
-          visibleLength + chunkSize,
-          FULL_SYSTEM_RESPONSE.length,
-        );
-
-        const nextContent = FULL_SYSTEM_RESPONSE.slice(0, visibleLength);
-
-        upsertStreamingDraft(threadId, {
-          id: draftMessageId,
-          threadId,
-          role: "system",
-          content: nextContent,
-          attachments: [],
-          modelId: model.id,
-          model,
-          createdAt: seed,
-          isStreaming: visibleLength < FULL_SYSTEM_RESPONSE.length,
-        });
-
-        if (visibleLength >= FULL_SYSTEM_RESPONSE.length) {
-          clearInterval(timer);
-          streamingTimersRef.current.delete(threadId);
-          removeStreamingThread(threadId);
-
-          void createSystemReply({
-            threadId,
-            userMessageId,
-            userMessageUpdatedAt,
-            content: FULL_SYSTEM_RESPONSE,
-            modelId: model.id,
-          })
-            .then((createdSystemMessage) => {
-              if (!createdSystemMessage) {
-                return;
-              }
-
-              const typedSystemMessage =
-                createdSystemMessage as PersistedMessagePayload;
-
-              appendCachedMessage(threadId, {
-                id: typedSystemMessage._id,
-                threadId,
-                role: "system",
-                content: FULL_SYSTEM_RESPONSE,
-                attachments: typedSystemMessage.attachments ?? [],
-                modelId: model.id,
-                model,
-                createdAt: typedSystemMessage.createdAt,
-                updatedAt: typedSystemMessage.updatedAt,
-              });
-            })
-            .finally(() => {
-              clearStreamingDraft(threadId, draftMessageId);
-            });
+    if (status === "error" || status === "timeout") {
+      setMessageCache((currentCache) => {
+        const currentMessages = currentCache[threadId];
+        if (!currentMessages) {
+          return currentCache;
         }
-      }, STREAM_INTERVAL_MS);
 
-      streamingTimersRef.current.set(threadId, timer);
-    },
-    [
-      addStreamingThread,
-      appendCachedMessage,
-      clearStreamingDraft,
-      createSystemReply,
-      removeStreamingThread,
-      upsertStreamingDraft,
-    ],
-  );
+        return {
+          ...currentCache,
+          [threadId]: currentMessages.map((message) =>
+            message.id === messageId
+              ? {
+                  ...message,
+                  streamStatus: status,
+                }
+              : message,
+          ),
+        };
+      });
+    }
 
-  useEffect(() => {
-    return () => {
-      for (const timer of streamingTimersRef.current.values()) {
-        clearInterval(timer);
-      }
-
-      streamingTimersRef.current.clear();
-    };
-  }, []);
+    if (status === "done" || status === "error" || status === "timeout") {
+      finalizeDrivenStreamMessage(threadId, messageId);
+    }
+  }, [finalizeDrivenStreamMessage]);
 
   useEffect(() => {
     if (threads.length === 0) {
@@ -500,6 +392,52 @@ function HomeComponent() {
     [generateAttachmentUploadUrl],
   );
 
+  const startAssistantReply = useCallback(
+    async ({
+      threadId,
+      userMessageId,
+      userMessageUpdatedAt,
+      model,
+    }: {
+      threadId: ThreadSummary["_id"];
+      userMessageId: Id<"messages">;
+      userMessageUpdatedAt: number;
+      model: Model;
+    }) => {
+      const createdAssistantMessage = (await createAssistantReply({
+        threadId,
+        userMessageId,
+        userMessageUpdatedAt,
+        modelId: model.id,
+      })) as PersistedMessagePayload | null;
+
+      if (!createdAssistantMessage) {
+        return;
+      }
+
+      appendCachedMessage(threadId, {
+        id: createdAssistantMessage._id,
+        threadId,
+        role: "system",
+        content: createdAssistantMessage.content,
+        attachments: createdAssistantMessage.attachments ?? [],
+        modelId: model.id,
+        model,
+        streamId: createdAssistantMessage.streamId,
+        streamStatus: createdAssistantMessage.streamStatus,
+        errorMessage: createdAssistantMessage.errorMessage,
+        createdAt: createdAssistantMessage.createdAt,
+        updatedAt: createdAssistantMessage.updatedAt,
+      });
+      markDrivenStreamMessage(threadId, createdAssistantMessage._id);
+    },
+    [
+      appendCachedMessage,
+      createAssistantReply,
+      markDrivenStreamMessage,
+    ],
+  );
+
   const handleSendMessage = useCallback(async (
     content: string,
     attachments: DraftAttachment[],
@@ -530,7 +468,14 @@ function HomeComponent() {
       return;
     }
 
-    if (streamingTimersRef.current.has(threadId)) {
+    const existingThreadMessages = getThreadMessages(threadId);
+    if (
+      streamingThreadIds.includes(threadId) ||
+      existingThreadMessages.some(
+        (message) =>
+          message.streamStatus === "pending" || message.streamStatus === "streaming",
+      )
+    ) {
       return;
     }
 
@@ -564,7 +509,7 @@ function HomeComponent() {
       updatedAt: createdUserMessage.updatedAt,
     });
 
-    startAssistantStream({
+    await startAssistantReply({
       threadId,
       userMessageId: createdUserMessage._id,
       userMessageUpdatedAt:
@@ -577,7 +522,9 @@ function HomeComponent() {
     createMessage,
     createThread,
     currentModel,
-    startAssistantStream,
+    getThreadMessages,
+    startAssistantReply,
+    streamingThreadIds,
     uploadAttachments,
   ]);
 
@@ -600,7 +547,9 @@ function HomeComponent() {
         return;
       }
 
-      stopStreamingForThread(threadId);
+      setStreamingThreadIds((currentThreadIds) =>
+        currentThreadIds.filter((currentThreadId) => currentThreadId !== threadId),
+      );
 
       const editResult = (await editMessage({
         threadId,
@@ -628,12 +577,14 @@ function HomeComponent() {
         updatedAt: editResult.updatedMessage.updatedAt,
       };
 
+      setDrivenStreamMessageIds((currentMessageIds) =>
+        currentMessageIds.filter(
+          (currentMessageId) => !editResult.deletedMessageIds.includes(currentMessageId),
+        ),
+      );
+
       setMessageCache((currentCache) => {
-        const fallbackMessages =
-          threadId === activeThreadId && persistedMessages
-            ? persistedMessages.map(toChatMessage)
-            : [];
-        const sourceMessages = currentCache[threadId] ?? fallbackMessages;
+        const sourceMessages = getThreadMessages(threadId);
         const deletedMessageIds = new Set<string>(editResult.deletedMessageIds);
         const prunedMessages = sourceMessages.filter(
           (currentMessage) => !deletedMessageIds.has(currentMessage.id),
@@ -659,7 +610,7 @@ function HomeComponent() {
       });
 
       setSelectedModel(nextModel);
-      startAssistantStream({
+      await startAssistantReply({
         threadId,
         userMessageId: editResult.updatedMessage._id,
         userMessageUpdatedAt:
@@ -668,13 +619,7 @@ function HomeComponent() {
         model: nextModel,
       });
     },
-    [
-      activeThreadId,
-      editMessage,
-      persistedMessages,
-      startAssistantStream,
-      stopStreamingForThread,
-    ],
+    [editMessage, getThreadMessages, startAssistantReply],
   );
 
   const handleEditMessage = useCallback(
@@ -719,12 +664,7 @@ function HomeComponent() {
         currentModel;
 
       const threadId = message.threadId;
-      const threadMessages = threadId
-        ? messageCache[threadId] ??
-          (threadId === activeThreadId && persistedMessages
-            ? persistedMessages.map(toChatMessage)
-            : [])
-        : [];
+      const threadMessages = threadId ? getThreadMessages(threadId) : [];
       const messageIndex = threadMessages.findIndex(
         (threadMessage) => threadMessage.id === message.id,
       );
@@ -748,7 +688,18 @@ function HomeComponent() {
         attachments: sourceMessage.attachments,
       });
     },
-    [activeThreadId, currentModel, messageCache, persistedMessages, restartFromUserMessage],
+    [currentModel, getThreadMessages, restartFromUserMessage],
+  );
+
+  const activeThreadIsStreaming = Boolean(
+    activeThreadId &&
+      (activeThread?.isStreaming ||
+        streamingThreadIds.includes(activeThreadId) ||
+        activeMessages.some(
+          (message) =>
+            message.streamStatus === "pending" ||
+            message.streamStatus === "streaming",
+        )),
   );
 
   if (
@@ -781,15 +732,16 @@ function HomeComponent() {
           thread={activeThread}
           messages={activeMessages}
           model={currentModel}
+          drivenStreamMessageIds={drivenStreamMessageIds}
+          streamUrl={streamUrl}
           onModelChange={handleModelChange}
+          onMessageStreamStatusChange={handleStreamStatusChange}
           onSendMessage={(message, attachments, uploadHandlers) =>
             handleSendMessage(message, attachments, uploadHandlers)
           }
           onEditMessage={handleEditMessage}
           onRetryMessage={handleRetryMessage}
-          isStreaming={Boolean(
-            activeThreadId && streamingThreadIds.includes(activeThreadId),
-          )}
+          isStreaming={activeThreadIsStreaming}
         />
       </SidebarInset>
     </SidebarProvider>

@@ -4,6 +4,7 @@ import type { MessageAttachment } from "@/lib/attachments";
 import { getModelById, type Model } from "@/lib/models";
 
 export type MessageRole = "user" | "system";
+export type StreamStatus = "pending" | "streaming" | "done" | "error" | "timeout";
 
 export type ChatMessage = {
   id: string;
@@ -15,6 +16,9 @@ export type ChatMessage = {
   model?: Model;
   createdAt: number;
   updatedAt?: number;
+  streamId?: string;
+  streamStatus?: StreamStatus;
+  errorMessage?: string;
   isStreaming?: boolean;
 };
 
@@ -25,6 +29,9 @@ type MessageLike = {
   content: string;
   attachments?: MessageAttachment[];
   modelId?: string;
+  streamId?: string;
+  streamStatus?: StreamStatus;
+  errorMessage?: string;
   createdAt: number;
   updatedAt?: number;
 };
@@ -40,6 +47,9 @@ export function toChatMessage(
     attachments: message.attachments ?? [],
     modelId: message.modelId,
     model: message.modelId ? getModelById(message.modelId) : undefined,
+    streamId: message.streamId,
+    streamStatus: message.streamStatus,
+    errorMessage: message.errorMessage,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
   };

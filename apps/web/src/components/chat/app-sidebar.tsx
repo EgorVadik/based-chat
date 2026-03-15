@@ -166,9 +166,9 @@ export default function AppSidebar({
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.threads.map((thread) => {
-                  const isStreamingThread = streamingThreadIds.includes(
-                    thread._id,
-                  )
+                  const isStreamingThread =
+                    thread.isStreaming ||
+                    streamingThreadIds.includes(thread._id)
 
                   return (
                     <SidebarMenuItem key={thread._id}>

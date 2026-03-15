@@ -11,6 +11,9 @@
   "dependencies": {
     "@better-auth/expo": "catalog:",
     "@convex-dev/better-auth": "catalog:",
+    "@convex-dev/persistent-text-streaming": "^0.3.0",
+    "@openrouter/ai-sdk-provider": "^2.3.1",
+    "ai": "^6.0.116",
     "better-auth": "catalog:",
     "convex": "catalog:",
     "dotenv": "catalog:",

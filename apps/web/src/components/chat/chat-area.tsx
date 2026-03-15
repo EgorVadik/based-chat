@@ -61,7 +61,10 @@ export default function ChatArea({
   thread,
   messages,
   model,
+  drivenStreamMessageIds,
+  streamUrl,
   onModelChange,
+  onMessageStreamStatusChange,
   onSendMessage,
   onEditMessage,
   onRetryMessage,
@@ -70,7 +73,14 @@ export default function ChatArea({
   thread: ThreadSummary | null;
   messages: ChatMessage[];
   model: Model;
+  drivenStreamMessageIds: string[];
+  streamUrl: URL;
   onModelChange: (model: Model) => void;
+  onMessageStreamStatusChange: (
+    threadId: ThreadSummary["_id"] | undefined,
+    messageId: string,
+    status: ChatMessage["streamStatus"],
+  ) => void;
   onSendMessage: (
     message: string,
     attachments: DraftAttachment[],
@@ -96,6 +106,10 @@ export default function ChatArea({
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [editingAttachments, setEditingAttachments] = useState<ComposerAttachment[]>([]);
   const lastMessage = messages.at(-1);
+  const lastMessageIsStreaming =
+    lastMessage?.streamStatus === "pending" ||
+    lastMessage?.streamStatus === "streaming" ||
+    lastMessage?.isStreaming;
 
   const resetEditingState = useCallback(() => {
     setEditingAttachments((currentAttachments) => {
@@ -149,7 +163,7 @@ export default function ChatArea({
   }, [resetEditingState, thread?._id]);
 
   useEffect(() => {
-    if (lastMessage?.isStreaming) {
+    if (lastMessageIsStreaming) {
       updateScrollState();
       return;
     }
@@ -163,7 +177,7 @@ export default function ChatArea({
   }, [
     lastMessage?.content,
     lastMessage?.id,
-    lastMessage?.isStreaming,
+    lastMessageIsStreaming,
     messages.length,
     scrollToBottom,
     updateScrollState,
@@ -191,6 +205,11 @@ export default function ChatArea({
                 <MessageBubble
                   key={message.id}
                   message={message}
+                  driveStream={drivenStreamMessageIds.includes(message.id)}
+                  streamUrl={streamUrl}
+                  onStreamStatusChange={(status) =>
+                    onMessageStreamStatusChange(message.threadId, message.id, status)
+                  }
                   onRetry={() => void onRetryMessage(message)}
                   onEdit={
                     message.role === "user"

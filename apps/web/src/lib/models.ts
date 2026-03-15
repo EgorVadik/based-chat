@@ -67,6 +67,22 @@ export const MODELS: Model[] = [
     capabilities: ["vision", "tools"],
   },
   {
+    id: "gpt-oss-20b",
+    name: "GPT OSS 20B",
+    provider: "OpenAI",
+    description: "Open-weight 21B MoE model, Apache 2.0",
+    pricing: "$",
+    capabilities: ["tools", "reasoning"],
+  },
+  {
+    id: "gpt-oss-120b",
+    name: "GPT OSS 120B",
+    provider: "OpenAI",
+    description: "Open-weight 117B MoE model, Apache 2.0",
+    pricing: "$$",
+    capabilities: ["tools", "reasoning"],
+  },
+  {
     id: "gemini-2.5-pro",
     name: "Gemini 2.5 Pro",
     provider: "Google",
@@ -97,6 +113,14 @@ export const MODELS: Model[] = [
     description: "Advanced reasoning specialist",
     pricing: "$",
     capabilities: ["reasoning"],
+  },
+  {
+    id: "deepseek-v3",
+    name: "DeepSeek V3",
+    provider: "DeepSeek",
+    description: "Latest from DeepSeek, rivals leading closed-source models",
+    pricing: "$$$",
+    capabilities: ["tools"],
   },
 ];
 

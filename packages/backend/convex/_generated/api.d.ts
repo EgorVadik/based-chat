@@ -12,6 +12,7 @@ import type * as auth from "../auth.js";
 import type * as favoriteModels from "../favoriteModels.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
+import type * as llm from "../llm.js";
 import type * as messages from "../messages.js";
 import type * as threads from "../threads.js";
 
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   favoriteModels: typeof favoriteModels;
   healthCheck: typeof healthCheck;
   http: typeof http;
+  llm: typeof llm;
   messages: typeof messages;
   threads: typeof threads;
 }>;
@@ -2032,6 +2034,41 @@ export declare const components: {
     adapterTest: {
       runCustomTests: FunctionReference<"action", "internal", any, any>;
       runTests: FunctionReference<"action", "internal", any, any>;
+    };
+  };
+  persistentTextStreaming: {
+    lib: {
+      addChunk: FunctionReference<
+        "mutation",
+        "internal",
+        { final: boolean; streamId: string; text: string },
+        any
+      >;
+      createStream: FunctionReference<"mutation", "internal", {}, any>;
+      getStreamStatus: FunctionReference<
+        "query",
+        "internal",
+        { streamId: string },
+        "pending" | "streaming" | "done" | "error" | "timeout"
+      >;
+      getStreamText: FunctionReference<
+        "query",
+        "internal",
+        { streamId: string },
+        {
+          status: "pending" | "streaming" | "done" | "error" | "timeout";
+          text: string;
+        }
+      >;
+      setStreamStatus: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          status: "pending" | "streaming" | "done" | "error" | "timeout";
+          streamId: string;
+        },
+        any
+      >;
     };
   };
 };

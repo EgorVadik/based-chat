@@ -1,3 +1,4 @@
+import { api } from '@based-chat/backend/convex/_generated/api'
 import { Button } from '@based-chat/ui/components/button'
 import { Textarea } from '@based-chat/ui/components/textarea'
 import {
@@ -8,9 +9,7 @@ import {
 import { cn } from '@based-chat/ui/lib/utils'
 import {
   ArrowUp,
-  Clock3,
   Copy,
-  Cpu,
   FileCode2,
   FileText,
   Pencil,
@@ -18,9 +17,8 @@ import {
   RotateCcw,
   Sparkles,
   X,
-  Zap,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import type { ComposerAttachment } from '@/lib/attachments'
@@ -30,6 +28,7 @@ import {
   prepareDraftAttachments,
   revokeComposerAttachmentPreview,
 } from '@/lib/attachments'
+import { usePersistentTextStream } from '@/lib/persistent-text-stream'
 import type { ChatMessage } from '@/lib/chat'
 import type { Model } from '@/lib/models'
 
@@ -37,19 +36,7 @@ import ChatAttachmentStrip from './chat-attachment-strip'
 import ChatAttachmentDialog from './chat-attachment-dialog'
 import ModelSelector from './model-selector'
 import MarkdownRenderer from './markdown-renderer'
-
-function getFakeMessageStats(message: ChatMessage) {
-  const contentLength = message.content.trim().length
-  const fakeTokenCount = Math.max(128, Math.round(contentLength / 3.4))
-  const fakeSpeed = Math.max(18, 52 - fakeTokenCount / 28).toFixed(2)
-  const fakeTtfb = (0.42 + (fakeTokenCount % 7) * 0.07).toFixed(2)
-
-  return {
-    tokenCount: fakeTokenCount,
-    speed: `${fakeSpeed} tok/sec`,
-    ttfb: `${fakeTtfb} sec`,
-  }
-}
+import type { StreamId } from '@convex-dev/persistent-text-streaming'
 
 function MessageAttachmentGrid({
   attachments,
@@ -65,7 +52,9 @@ function MessageAttachmentGrid({
   }
 
   const imageAttachments = attachments.filter(isImageAttachment)
-  const fileAttachments = attachments.filter((attachment) => !isImageAttachment(attachment))
+  const fileAttachments = attachments.filter(
+    (attachment) => !isImageAttachment(attachment),
+  )
 
   const getFileIcon = (contentType: string) => {
     if (
@@ -81,12 +70,7 @@ function MessageAttachmentGrid({
   }
 
   return (
-    <div
-      className={cn(
-        'space-y-2',
-        align === 'end' && 'self-end',
-      )}
-    >
+    <div className={cn('space-y-2', align === 'end' && 'self-end')}>
       {imageAttachments.length > 0 ? (
         <div
           className={cn(
@@ -107,7 +91,7 @@ function MessageAttachmentGrid({
                   alt={attachment.fileName}
                   className={cn(
                     'w-full object-cover transition-transform duration-300 group-hover/attachment:scale-[1.03]',
-                    imageAttachments.length === 1 ? 'max-h-[26rem]' : 'h-44',
+                    imageAttachments.length === 1 ? 'max-h-104' : 'h-44',
                   )}
                 />
               ) : (
@@ -120,8 +104,10 @@ function MessageAttachmentGrid({
                   Preview unavailable
                 </div>
               )}
-              <div className='absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-3 py-2 text-white'>
-                <p className='truncate text-xs font-medium'>{attachment.fileName}</p>
+              <div className='absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/35 to-transparent px-3 py-2 text-white'>
+                <p className='truncate text-xs font-medium'>
+                  {attachment.fileName}
+                </p>
               </div>
             </button>
           ))}
@@ -138,13 +124,15 @@ function MessageAttachmentGrid({
                 key={attachment.storageId}
                 type='button'
                 onClick={() => onOpen(attachment.storageId)}
-                className='flex min-w-[12rem] max-w-[16rem] items-start gap-3 rounded-2xl border border-border/50 bg-card/50 px-3 py-2.5 text-left shadow-sm transition-transform hover:-translate-y-0.5'
+                className='flex min-w-48 max-w-[16rem] items-start gap-3 rounded-2xl border border-border/50 bg-card/50 px-3 py-2.5 text-left shadow-sm transition-transform hover:-translate-y-0.5'
               >
                 <div className='flex size-10 shrink-0 items-center justify-center rounded-2xl bg-muted/50 text-muted-foreground'>
                   <FileIcon className='size-4' />
                 </div>
                 <div className='min-w-0 flex-1'>
-                  <p className='truncate text-xs font-medium'>{attachment.fileName}</p>
+                  <p className='truncate text-xs font-medium'>
+                    {attachment.fileName}
+                  </p>
                   <p className='mt-1 text-[11px] text-muted-foreground/70'>
                     {Math.max(1, Math.round(attachment.size / 1024))} KB
                   </p>
@@ -160,6 +148,9 @@ function MessageAttachmentGrid({
 
 export default function MessageBubble({
   message,
+  driveStream = false,
+  streamUrl,
+  onStreamStatusChange,
   onRetry,
   onEdit,
   isEditing = false,
@@ -173,6 +164,9 @@ export default function MessageBubble({
   onSaveEdit,
 }: {
   message: ChatMessage
+  driveStream?: boolean
+  streamUrl: URL
+  onStreamStatusChange?: (status: ChatMessage['streamStatus']) => void
   onRetry?: () => void
   onEdit?: () => void
   isEditing?: boolean
@@ -186,26 +180,61 @@ export default function MessageBubble({
   onSaveEdit?: () => void
 }) {
   const isUser = message.role === 'user'
-  const isStreaming = !isUser && message.isStreaming
-  const stats = getFakeMessageStats(message)
   const modelLabel = message.model?.name ?? message.modelId ?? 'Assistant'
-  const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null)
+  const [selectedAttachmentId, setSelectedAttachmentId] = useState<
+    string | null
+  >(null)
   const [fileInputKey, setFileInputKey] = useState(0)
+  const liveStreamId =
+    message.streamId &&
+    (driveStream ||
+      message.streamStatus === 'pending' ||
+      message.streamStatus === 'streaming' ||
+      message.streamStatus === 'error' ||
+      message.streamStatus === 'timeout')
+      ? message.streamId
+      : undefined
+  const liveStream = usePersistentTextStream(
+    (api.messages as { getStreamBody: any }).getStreamBody,
+    streamUrl,
+    driveStream,
+    liveStreamId as StreamId,
+  )
+  const streamStatus = liveStreamId ? liveStream.status : message.streamStatus
+  const streamErrorMessage = liveStreamId
+    ? (liveStream.errorMessage ?? message.errorMessage)
+    : message.errorMessage
+  const displayContent =
+    liveStreamId && liveStream.text.length > 0
+      ? liveStream.text
+      : message.content
+  const isStreaming =
+    !isUser && (streamStatus === 'pending' || streamStatus === 'streaming')
+  const hasStreamError =
+    !isUser && (streamStatus === 'error' || streamStatus === 'timeout')
   const dialogAttachments = useMemo(
     () =>
-      message.attachments
-        .map((attachment) => ({
-          id: attachment.storageId,
-          kind: attachment.kind,
-          fileName: attachment.fileName,
-          contentType: attachment.contentType,
-          size: attachment.size,
-          url: attachment.url,
-        })),
+      message.attachments.map((attachment) => ({
+        id: attachment.storageId,
+        kind: attachment.kind,
+        fileName: attachment.fileName,
+        contentType: attachment.contentType,
+        size: attachment.size,
+        url: attachment.url,
+      })),
     [message.attachments],
   )
+
+  useEffect(() => {
+    if (!message.streamId || !streamStatus) {
+      return
+    }
+
+    onStreamStatusChange?.(streamStatus)
+  }, [message.streamId, onStreamStatusChange, streamStatus])
+
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(message.content)
+    await navigator.clipboard.writeText(displayContent)
     toast.success('Message copied')
   }
 
@@ -213,7 +242,9 @@ export default function MessageBubble({
     const result = prepareDraftAttachments(editingAttachments, files)
 
     if (result.blockedCount > 0) {
-      toast.error('Compressed files like zip, rar, or archive bundles are not allowed.')
+      toast.error(
+        'Compressed files like zip, rar, or archive bundles are not allowed.',
+      )
     }
 
     if (result.overLimitCount > 0) {
@@ -224,10 +255,7 @@ export default function MessageBubble({
       return
     }
 
-    onEditingAttachmentsChange?.([
-      ...editingAttachments,
-      ...result.attachments,
-    ])
+    onEditingAttachmentsChange?.([...editingAttachments, ...result.attachments])
     setFileInputKey((currentKey) => currentKey + 1)
   }
 
@@ -263,10 +291,7 @@ export default function MessageBubble({
 
   return (
     <div
-      className={cn(
-        'flex px-4 py-3',
-        isUser ? 'justify-end' : 'justify-start',
-      )}
+      className={cn('flex px-4 py-3', isUser ? 'justify-end' : 'justify-start')}
     >
       <div
         className={cn(
@@ -348,7 +373,9 @@ export default function MessageBubble({
                             className='hidden'
                             multiple
                             onChange={(event) => {
-                              handleAddEditingFiles(Array.from(event.target.files ?? []))
+                              handleAddEditingFiles(
+                                Array.from(event.target.files ?? []),
+                              )
                               event.target.value = ''
                             }}
                             id={`edit-attachments-${message.id}`}
@@ -359,7 +386,9 @@ export default function MessageBubble({
                             size='icon-sm'
                             onClick={() => {
                               document
-                                .getElementById(`edit-attachments-${message.id}`)
+                                .getElementById(
+                                  `edit-attachments-${message.id}`,
+                                )
                                 ?.click()
                             }}
                             className='rounded-full text-muted-foreground hover:text-foreground'
@@ -368,7 +397,9 @@ export default function MessageBubble({
                           </Button>
                           <ModelSelector
                             model={editingModel}
-                            onModelChange={(model) => onEditingModelChange?.(model)}
+                            onModelChange={(model) =>
+                              onEditingModelChange?.(model)
+                            }
                           />
                         </div>
                         <div className='flex items-center gap-2'>
@@ -462,15 +493,32 @@ export default function MessageBubble({
                 />
               </div>
             ) : null}
-            {message.content ? (
-              <MarkdownRenderer content={message.content} />
+            {displayContent ? (
+              <>
+                <MarkdownRenderer content={displayContent} />
+                {hasStreamError ? (
+                  <div className='mt-3 inline-flex max-w-full items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive/90'>
+                    <span>
+                      {streamErrorMessage ??
+                        'Reply failed to stream. Retry to generate again.'}
+                    </span>
+                  </div>
+                ) : null}
+              </>
+            ) : hasStreamError ? (
+              <div className='inline-flex max-w-full items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive/90'>
+                <span>
+                  {streamErrorMessage ??
+                    'Reply failed to stream. Retry to generate again.'}
+                </span>
+              </div>
             ) : (
               <div className='inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs text-muted-foreground'>
                 <span className='size-1.5 animate-pulse rounded-full bg-primary/70' />
                 <span>Thinking</span>
               </div>
             )}
-            {message.content && !isStreaming ? (
+            {displayContent && !isStreaming ? (
               <div className='mt-3 min-h-6 translate-y-0 overflow-hidden text-[12px] text-muted-foreground/80 opacity-0 transition-opacity duration-200 pointer-events-none group-hover/message:opacity-100 group-hover/message:pointer-events-auto'>
                 <div className='flex items-center gap-3 whitespace-nowrap'>
                   <Tooltip>
@@ -503,31 +551,15 @@ export default function MessageBubble({
                         </Button>
                       }
                     />
-                    <TooltipContent side='bottom'>Retry response</TooltipContent>
+                    <TooltipContent side='bottom'>
+                      Retry response
+                    </TooltipContent>
                   </Tooltip>
                   <div className='inline-flex items-center gap-1.5 font-medium text-foreground/90'>
                     <Sparkles className='size-3.5 text-primary/80' />
                     <span>{modelLabel}</span>
                   </div>
-                  <div className='inline-flex items-center gap-1.5'>
-                    <Zap className='size-3.5' />
-                    <span>{stats.speed}</span>
-                  </div>
-                  <div className='inline-flex items-center gap-1.5'>
-                    <Cpu className='size-3.5' />
-                    <span>{stats.tokenCount} tokens</span>
-                  </div>
-                  <div className='inline-flex items-center gap-1.5'>
-                    <Clock3 className='size-3.5' />
-                    <span>Time-to-First: {stats.ttfb}</span>
-                  </div>
                 </div>
-              </div>
-            ) : null}
-            {isStreaming ? (
-              <div className='mt-2 inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/5 px-2.5 py-1 text-[11px] text-primary/80'>
-                <span className='size-1.5 animate-pulse rounded-full bg-primary' />
-                <span>Streaming reply</span>
               </div>
             ) : null}
           </div>

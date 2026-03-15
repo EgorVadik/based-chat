@@ -32,6 +32,8 @@ export default defineSchema({
     role: v.union(v.literal("user"), v.literal("system")),
     modelId: v.string(),
     content: v.string(),
+    streamId: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
     attachments: v.optional(
       v.array(
         v.object({
@@ -45,5 +47,7 @@ export default defineSchema({
     ),
     createdAt: v.number(),
     updatedAt: v.optional(v.number()),
-  }).index("by_threadId_createdAt", ["threadId", "createdAt"]),
+  })
+    .index("by_threadId_createdAt", ["threadId", "createdAt"])
+    .index("by_streamId", ["streamId"]),
 });

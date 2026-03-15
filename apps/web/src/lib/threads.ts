@@ -5,6 +5,7 @@ export type ThreadSummary = {
   title: string;
   createdAt: number;
   updatedAt: number;
+  isStreaming?: boolean;
 };
 
 export function getThreadsByTimeGroup(threads: ThreadSummary[]) {

@@ -1,9 +1,19 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import {
+  PersistentTextStreaming,
+  type StreamId,
+} from "@convex-dev/persistent-text-streaming";
 
 import type { Id } from "./_generated/dataModel";
+import { components } from "./_generated/api";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { authComponent } from "./auth";
+
+const persistentTextStreaming = new PersistentTextStreaming(
+  (components as typeof components & { persistentTextStreaming: any })
+    .persistentTextStreaming,
+);
 
 function normalizeTitle(title?: string) {
   const trimmed = title?.trim();
@@ -35,6 +45,28 @@ async function requireOwnedThread(
   return thread;
 }
 
+async function getThreadStreamingState(
+  ctx: QueryCtx,
+  threadId: Id<"threads">,
+) {
+  const latestMessage = await ctx.db
+    .query("messages")
+    .withIndex("by_threadId_createdAt", (q) => q.eq("threadId", threadId))
+    .order("desc")
+    .first();
+
+  if (!latestMessage?.streamId) {
+    return false;
+  }
+
+  const streamBody = await persistentTextStreaming.getStreamBody(
+    ctx,
+    latestMessage.streamId as StreamId,
+  );
+
+  return streamBody.status === "pending" || streamBody.status === "streaming";
+}
+
 export const listPaginated = query({
   args: {
     paginationOpts: paginationOptsValidator,
@@ -51,11 +83,21 @@ export const listPaginated = query({
       };
     }
 
-    return await ctx.db
+    const result = await ctx.db
       .query("threads")
       .withIndex("by_userId_updatedAt", (q) => q.eq("userId", user._id))
       .order("desc")
       .paginate(args.paginationOpts);
+
+    return {
+      ...result,
+      page: await Promise.all(
+        result.page.map(async (thread) => ({
+          ...thread,
+          isStreaming: await getThreadStreamingState(ctx, thread._id),
+        })),
+      ),
+    };
   },
 });
 
