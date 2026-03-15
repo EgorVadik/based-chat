@@ -67,6 +67,17 @@ type GenerationStats = {
   textTokens?: number
   reasoningTokens?: number
 }
+type ImportedTemporaryMessage = {
+  role: 'user' | 'system'
+  modelId: string
+  content: string
+  reasoningText?: string
+  attachments?: StoredAttachment[]
+  errorMessage?: string
+  generationStats?: GenerationStats
+  createdAt: number
+  updatedAt?: number
+}
 type TemporaryStreamAttachment = {
   kind: 'image' | 'file'
   storageId: string
@@ -85,6 +96,18 @@ type UserProfilePromptContext = {
   traits: string[]
   bio?: string
 }
+
+const importedTemporaryMessageValidator = v.object({
+  role: v.union(v.literal('user'), v.literal('system')),
+  modelId: v.string(),
+  content: v.string(),
+  reasoningText: v.optional(v.string()),
+  attachments: v.optional(v.array(attachmentValidator)),
+  errorMessage: v.optional(v.string()),
+  generationStats: v.optional(generationStatsValidator),
+  createdAt: v.number(),
+  updatedAt: v.optional(v.number()),
+})
 
 const persistentTextStreaming = new PersistentTextStreaming(
   (components as typeof components & { persistentTextStreaming: any })
@@ -835,6 +858,106 @@ export const createThreadWithFirstMessage = mutation({
         createdAt: timestamp,
         updatedAt: timestamp,
       }),
+    }
+  },
+})
+
+export const importTemporaryThread = mutation({
+  args: {
+    messages: v.array(importedTemporaryMessageValidator),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx)
+    const importedMessages = args.messages as ImportedTemporaryMessage[]
+
+    if (importedMessages.length === 0) {
+      throw new ConvexError('At least one message is required to store a temporary chat')
+    }
+
+    const sortedMessages = [...importedMessages].sort(
+      (left, right) =>
+        left.createdAt - right.createdAt ||
+        (left.updatedAt ?? left.createdAt) - (right.updatedAt ?? right.createdAt),
+    )
+    const firstUserMessageInput = sortedMessages.find(
+      (message) => message.role === 'user',
+    )
+    const lastMessage = sortedMessages[sortedMessages.length - 1]
+    const threadCreatedAt = sortedMessages[0]?.createdAt ?? Date.now()
+    const threadUpdatedAt =
+      lastMessage?.updatedAt ??
+      lastMessage?.createdAt ??
+      threadCreatedAt
+
+    const threadId = await ctx.db.insert('threads', {
+      userId: user._id,
+      title: 'New chat',
+      createdAt: threadCreatedAt,
+      updatedAt: threadUpdatedAt,
+    })
+
+    const persistedMessages = await Promise.all(
+      sortedMessages.map(async (message) => {
+        const messageId = await ctx.db.insert('messages', {
+          threadId,
+          userId: user._id,
+          role: message.role,
+          modelId: message.modelId,
+          content: message.content.trim(),
+          reasoningText: message.reasoningText,
+          attachments:
+            message.attachments && message.attachments.length > 0
+              ? message.attachments
+              : undefined,
+          errorMessage: message.errorMessage,
+          generationStats: message.generationStats,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt ?? message.createdAt,
+        })
+
+        return await toClientMessage(ctx, {
+          _id: messageId,
+          threadId,
+          userId: user._id,
+          role: message.role,
+          modelId: message.modelId,
+          content: message.content.trim(),
+          reasoningText: message.reasoningText,
+          attachments:
+            message.attachments && message.attachments.length > 0
+              ? message.attachments
+              : undefined,
+          errorMessage: message.errorMessage,
+          generationStats: message.generationStats,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt ?? message.createdAt,
+        })
+      }),
+    )
+
+    if (firstUserMessageInput) {
+      const firstUserMessage = persistedMessages.find(
+        (message) =>
+          message.role === 'user' &&
+          message.createdAt === firstUserMessageInput.createdAt,
+      )
+
+      if (firstUserMessage) {
+        await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
+          threadId,
+          messageId: firstUserMessage._id,
+        })
+      }
+    }
+
+    return {
+      thread: {
+        _id: threadId,
+        title: 'New chat',
+        createdAt: threadCreatedAt,
+        updatedAt: threadUpdatedAt,
+      },
+      messages: persistedMessages,
     }
   },
 })

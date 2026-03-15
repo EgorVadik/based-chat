@@ -26,6 +26,12 @@ import {
   AvatarFallback,
   AvatarImage,
 } from '@based-chat/ui/components/avatar'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@based-chat/ui/components/tooltip'
 import { cn } from '@based-chat/ui/lib/utils'
 import {
   MessageSquarePlus,
@@ -70,16 +76,24 @@ function BrandMark() {
   )
 }
 
+function ThreadTitle({ title }: { title: string }) {
+  return <span className='min-w-0 flex-1 truncate'>{title}</span>
+}
+
 function AppSidebar({
   threads,
   activeThreadId,
   temporaryThread,
   isTemporaryActive,
   isTemporaryStreaming,
+  temporaryMessageCount,
   streamingThreadIds,
   onSelectThread,
   onSelectTemporaryChat,
   onPrefetchThread,
+  onClearTemporaryChat,
+  onExportTemporaryChatAsMarkdown,
+  onConvertTemporaryChatToStored,
   onOpenThreadInNewTab,
   onRenameThread,
   onDeleteThread,
@@ -94,15 +108,16 @@ function AppSidebar({
   temporaryThread: TemporaryChatThread
   isTemporaryActive: boolean
   isTemporaryStreaming: boolean
+  temporaryMessageCount: number
   streamingThreadIds: ThreadSummary['_id'][]
   onSelectThread: (id: ThreadSummary['_id']) => void
   onSelectTemporaryChat: () => void
   onPrefetchThread: (id: ThreadSummary['_id']) => void
+  onClearTemporaryChat: () => Promise<void> | void
+  onExportTemporaryChatAsMarkdown: () => Promise<void>
+  onConvertTemporaryChatToStored: () => Promise<void>
   onOpenThreadInNewTab: (id: ThreadSummary['_id']) => void
-  onRenameThread: (
-    id: ThreadSummary['_id'],
-    title: string,
-  ) => Promise<void>
+  onRenameThread: (id: ThreadSummary['_id'], title: string) => Promise<void>
   onDeleteThread: (id: ThreadSummary['_id']) => Promise<void>
   onExportThreadAsMarkdown: (id: ThreadSummary['_id']) => Promise<void>
   onNewChat: () => void
@@ -143,6 +158,7 @@ function AppSidebar({
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
       .join('') || 'BC'
+  const isTemporaryActionPending = pendingThreadActionId === temporaryThread._id
 
   useEffect(() => {
     if (threadPaginationStatus !== 'CanLoadMore') {
@@ -180,7 +196,10 @@ function AppSidebar({
   }, [renamingThreadId])
 
   useEffect(() => {
-    if (renamingThreadId && !threads.some((thread) => thread._id === renamingThreadId)) {
+    if (
+      renamingThreadId &&
+      !threads.some((thread) => thread._id === renamingThreadId)
+    ) {
       setRenamingThreadId(null)
       setRenameValue('')
     }
@@ -219,7 +238,9 @@ function AppSidebar({
       await onRenameThread(thread._id, normalizedTitle)
       cancelRenamingThread()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to rename thread.')
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to rename thread.',
+      )
     } finally {
       setPendingThreadActionId((currentThreadId) =>
         currentThreadId === thread._id ? null : currentThreadId,
@@ -236,7 +257,9 @@ function AppSidebar({
     try {
       await action()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Thread action failed.')
+      toast.error(
+        error instanceof Error ? error.message : 'Thread action failed.',
+      )
     } finally {
       setPendingThreadActionId((currentThreadId) =>
         currentThreadId === threadId ? null : currentThreadId,
@@ -277,28 +300,108 @@ function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={isTemporaryActive}
-                  onClick={onSelectTemporaryChat}
-                  className='group/conv cursor-pointer'
-                >
-                  <Clock3
-                    className={cn(
-                      'size-3.5 shrink-0',
-                      isTemporaryActive
-                        ? 'text-primary'
-                        : 'text-muted-foreground/70',
-                    )}
+                <DropdownMenu>
+                  <TooltipProvider delay={300}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <SidebarMenuButton
+                            isActive={isTemporaryActive}
+                            onClick={onSelectTemporaryChat}
+                            className='group/conv cursor-pointer'
+                          >
+                            <Clock3
+                              className={cn(
+                                'size-3.5 shrink-0',
+                                isTemporaryActive
+                                  ? 'text-primary'
+                                  : 'text-muted-foreground/70',
+                              )}
+                            />
+                            <ThreadTitle title={temporaryThread.title} />
+                            {isTemporaryStreaming ? (
+                              <LoaderCircle className='ml-auto size-3 animate-spin text-primary' />
+                            ) : (
+                              <span className='ml-auto text-[10px] font-mono uppercase tracking-widest text-sidebar-foreground/35'>
+                                Local
+                              </span>
+                            )}
+                          </SidebarMenuButton>
+                        }
+                      />
+                      <TooltipContent side='bottom'>
+                        {temporaryThread.title}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <DropdownMenuTrigger
+                    render={
+                      <SidebarMenuAction
+                        showOnHover
+                        className='text-muted-foreground/70 hover:text-foreground'
+                        onClick={(event) => {
+                          event.stopPropagation()
+                        }}
+                      >
+                        <Ellipsis className='size-3.5' />
+                        <span className='sr-only'>Temporary chat actions</span>
+                      </SidebarMenuAction>
+                    }
                   />
-                  <span className='truncate'>{temporaryThread.title}</span>
-                  {isTemporaryStreaming ? (
-                    <LoaderCircle className='ml-auto size-3 animate-spin text-primary' />
-                  ) : (
-                    <span className='ml-auto text-[10px] font-mono uppercase tracking-widest text-sidebar-foreground/35'>
-                      Local
-                    </span>
-                  )}
-                </SidebarMenuButton>
+                  <DropdownMenuContent
+                    align='end'
+                    side='bottom'
+                    sideOffset={8}
+                    className='w-48'
+                  >
+                    <DropdownMenuItem
+                      disabled={
+                        isTemporaryActionPending ||
+                        isTemporaryStreaming ||
+                        temporaryMessageCount === 0
+                      }
+                      onClick={() =>
+                        void handleThreadAction(temporaryThread._id, () =>
+                          onConvertTemporaryChatToStored(),
+                        )
+                      }
+                    >
+                      <MessageSquare className='size-3.5' />
+                      <span>Convert to stored chat</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={
+                        isTemporaryActionPending || temporaryMessageCount === 0
+                      }
+                      onClick={() =>
+                        void handleThreadAction(temporaryThread._id, () =>
+                          onExportTemporaryChatAsMarkdown(),
+                        )
+                      }
+                    >
+                      <FileText className='size-3.5' />
+                      <span>Export as markdown</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant='destructive'
+                      disabled={
+                        isTemporaryActionPending || temporaryMessageCount === 0
+                      }
+                      onClick={() =>
+                        void handleThreadAction(
+                          temporaryThread._id,
+                          async () => {
+                            await onClearTemporaryChat()
+                          },
+                        )
+                      }
+                    >
+                      <Trash2 className='size-3.5' />
+                      <span>Clear chat</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
@@ -312,8 +415,7 @@ function AppSidebar({
               <SidebarMenu>
                 {group.threads.map((thread) => {
                   const isStreamingThread =
-                    thread.isStreaming ||
-                    streamingThreadIdSet.has(thread._id)
+                    thread.isStreaming || streamingThreadIdSet.has(thread._id)
                   const isRenamingThread = renamingThreadId === thread._id
                   const isThreadActionPending =
                     pendingThreadActionId === thread._id
@@ -339,7 +441,9 @@ function AppSidebar({
                           <Input
                             ref={renameInputRef}
                             value={renameValue}
-                            onChange={(event) => setRenameValue(event.target.value)}
+                            onChange={(event) =>
+                              setRenameValue(event.target.value)
+                            }
                             onBlur={() => {
                               void submitThreadRename(thread)
                             }}
@@ -358,26 +462,39 @@ function AppSidebar({
                         </form>
                       ) : (
                         <DropdownMenu>
-                          <SidebarMenuButton
-                            isActive={thread._id === activeThreadId}
-                            onClick={() => onSelectThread(thread._id)}
-                            onMouseEnter={() => onPrefetchThread(thread._id)}
-                            onFocus={() => onPrefetchThread(thread._id)}
-                            className='group/conv cursor-pointer'
-                          >
-                            <div
-                              className={cn(
-                                'size-1.5 shrink-0 rounded-full',
-                                isStreamingThread
-                                  ? 'bg-primary/70'
-                                  : 'bg-muted-foreground/50',
-                              )}
-                            />
-                            <span className='truncate'>{thread.title}</span>
-                            {isStreamingThread ? (
-                              <LoaderCircle className='ml-auto mr-6 size-3 animate-spin text-primary' />
-                            ) : null}
-                          </SidebarMenuButton>
+                          <TooltipProvider delay={500}>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <SidebarMenuButton
+                                    isActive={thread._id === activeThreadId}
+                                    onClick={() => onSelectThread(thread._id)}
+                                    onMouseEnter={() =>
+                                      onPrefetchThread(thread._id)
+                                    }
+                                    onFocus={() => onPrefetchThread(thread._id)}
+                                    className='group/conv cursor-pointer'
+                                  >
+                                    <div
+                                      className={cn(
+                                        'size-1.5 shrink-0 rounded-full',
+                                        isStreamingThread
+                                          ? 'bg-primary/70'
+                                          : 'bg-muted-foreground/50',
+                                      )}
+                                    />
+                                    <ThreadTitle title={thread.title} />
+                                    {isStreamingThread ? (
+                                      <LoaderCircle className='ml-auto size-3 animate-spin text-primary' />
+                                    ) : null}
+                                  </SidebarMenuButton>
+                                }
+                              />
+                              <TooltipContent side='bottom'>
+                                {thread.title}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                           <>
                             <DropdownMenuTrigger
                               render={
@@ -389,7 +506,9 @@ function AppSidebar({
                                   }}
                                 >
                                   <Ellipsis className='size-3.5' />
-                                  <span className='sr-only'>Thread actions</span>
+                                  <span className='sr-only'>
+                                    Thread actions
+                                  </span>
                                 </SidebarMenuAction>
                               }
                             />
@@ -576,7 +695,8 @@ function areSidebarPropsEqual(
     previousProps.user.name === nextProps.user.name &&
     previousProps.user.email === nextProps.user.email &&
     previousProps.user.image === nextProps.user.image &&
-    previousProps.streamingThreadIds.length === nextProps.streamingThreadIds.length &&
+    previousProps.streamingThreadIds.length ===
+      nextProps.streamingThreadIds.length &&
     previousProps.streamingThreadIds.every(
       (threadId, index) => threadId === nextProps.streamingThreadIds[index],
     ) &&

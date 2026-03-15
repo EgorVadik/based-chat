@@ -73,6 +73,10 @@ type FirstMessageCreationPayload = {
   thread: ThreadSummary
   message: PersistedMessagePayload
 }
+type ImportedTemporaryThreadPayload = {
+  thread: ThreadSummary
+  messages: PersistedMessagePayload[]
+}
 
 type ChatWorkspaceUser = {
   name?: string | null
@@ -299,6 +303,9 @@ export default function ChatWorkspace({
   const createThreadWithFirstMessage = useMutation(
     (api.messages as { createThreadWithFirstMessage: any })
       .createThreadWithFirstMessage,
+  )
+  const importTemporaryThread = useMutation(
+    (api.messages as { importTemporaryThread: any }).importTemporaryThread,
   )
   const renameThread = useMutation(api.threads.rename)
   const deleteManyThreads = useMutation(api.threads.deleteMany)
@@ -787,6 +794,81 @@ export default function ChatWorkspace({
     },
     [allThreads, convex, getThreadMessages],
   )
+
+  const handleClearTemporaryChat = useCallback(() => {
+    temporaryStreamRef.current?.abort()
+    temporaryStreamRef.current = null
+    setDrivenStreamMessageIds((currentMessageIds) =>
+      activeThreadId === TEMPORARY_CHAT_THREAD_ID ? [] : currentMessageIds,
+    )
+    setStreamingThreadIds((currentThreadIds) =>
+      currentThreadIds.filter(
+        (currentThreadId) => currentThreadId !== TEMPORARY_CHAT_THREAD_ID,
+      ),
+    )
+    setTemporaryChatState(resetTemporaryChatState())
+    toast.success('Temporary chat cleared.')
+  }, [activeThreadId])
+
+  const handleExportTemporaryChatAsMarkdown = useCallback(async () => {
+    if (temporaryChatState.messages.length === 0) {
+      throw new Error('There are no messages to export yet.')
+    }
+
+    const markdown = buildThreadMarkdown(
+      temporaryChatState.thread,
+      temporaryChatState.messages,
+    )
+    downloadMarkdownFile('temporary-chat.md', markdown)
+    toast.success('Markdown export ready.')
+  }, [temporaryChatState.messages, temporaryChatState.thread])
+
+  const handleConvertTemporaryChatToStored = useCallback(async () => {
+    if (temporaryChatState.messages.length === 0) {
+      throw new Error('There are no messages to store yet.')
+    }
+
+    if (streamingThreadIds.includes(TEMPORARY_CHAT_THREAD_ID)) {
+      throw new Error('Wait for the temporary reply to finish before storing it.')
+    }
+
+    const importResult = (await importTemporaryThread({
+      messages: temporaryChatState.messages.map((message) => ({
+        role: message.role,
+        modelId: message.modelId ?? DEFAULT_MODEL.id,
+        content: message.content,
+        reasoningText: message.reasoningText,
+        attachments:
+          message.attachments.length > 0
+            ? message.attachments.map((attachment) => ({
+                kind: attachment.kind,
+                storageId: attachment.storageId,
+                fileName: attachment.fileName,
+                contentType: attachment.contentType,
+                size: attachment.size,
+              }))
+            : undefined,
+        errorMessage: message.errorMessage,
+        generationStats: message.generationStats,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+      })),
+    })) as ImportedTemporaryThreadPayload
+
+    setTransientThread(importResult.thread)
+    setMessageCache((currentCache) => ({
+      ...currentCache,
+      [importResult.thread._id]: importResult.messages.map(toChatMessage),
+    }))
+    setTemporaryChatState(resetTemporaryChatState())
+    void navigate({
+      to: '/chat/$threadId',
+      params: {
+        threadId: importResult.thread._id,
+      },
+    })
+    toast.success('Temporary chat saved to your history.')
+  }, [importTemporaryThread, navigate, streamingThreadIds, temporaryChatState.messages])
 
   const handleModelChange = useCallback((model: Model) => {
     setSelectedModel(model)
@@ -1512,10 +1594,14 @@ export default function ChatWorkspace({
         isTemporaryStreaming={streamingThreadIds.includes(
           TEMPORARY_CHAT_THREAD_ID,
         )}
+        temporaryMessageCount={temporaryChatState.messages.length}
         streamingThreadIds={streamingThreadIds}
         onSelectThread={handleSelectThread}
         onSelectTemporaryChat={handleSelectTemporaryChat}
         onPrefetchThread={handlePrefetchThread}
+        onClearTemporaryChat={handleClearTemporaryChat}
+        onExportTemporaryChatAsMarkdown={handleExportTemporaryChatAsMarkdown}
+        onConvertTemporaryChatToStored={handleConvertTemporaryChatToStored}
         onOpenThreadInNewTab={handleOpenThreadInNewTab}
         onRenameThread={handleRenameThread}
         onDeleteThread={handleDeleteThread}
