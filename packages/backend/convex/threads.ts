@@ -101,6 +101,28 @@ export const listPaginated = query({
   },
 });
 
+export const get = query({
+  args: {
+    threadId: v.id("threads"),
+  },
+  handler: async (ctx, args) => {
+    const user = await authComponent.safeGetAuthUser(ctx);
+    if (!user) {
+      return null;
+    }
+
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.userId !== user._id) {
+      return null;
+    }
+
+    return {
+      ...thread,
+      isStreaming: await getThreadStreamingState(ctx, args.threadId),
+    };
+  },
+});
+
 export const create = mutation({
   args: {
     title: v.optional(v.string()),

@@ -1,7 +1,7 @@
 import { Button } from "@based-chat/ui/components/button";
 import { Textarea } from "@based-chat/ui/components/textarea";
 import { cn } from "@based-chat/ui/lib/utils";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -32,9 +32,11 @@ export default function ChatInput({
   model,
   onModelChange,
   onSend,
+  onAbort,
   value,
   onValueChange,
   disabled = false,
+  isStreaming = false,
   className,
   resetKey,
 }: {
@@ -45,9 +47,11 @@ export default function ChatInput({
     attachments: DraftAttachment[],
     uploadHandlers?: AttachmentUploadHandlers,
   ) => void | Promise<void>;
+  onAbort?: () => void;
   value?: string;
   onValueChange?: (value: string) => void;
   disabled?: boolean;
+  isStreaming?: boolean;
   className?: string;
   resetKey?: string;
 }) {
@@ -284,7 +288,7 @@ export default function ChatInput({
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
-              disabled={disabled || isSubmitting}
+              disabled={disabled || isSubmitting || isStreaming}
               placeholder="Send a message..."
               rows={1}
               className="block min-h-[96px] w-full resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 pb-3 text-sm leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
@@ -298,7 +302,7 @@ export default function ChatInput({
                 size="icon-sm"
                 className="text-muted-foreground hover:text-foreground"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isStreaming}
               >
                 <Paperclip className="size-4" />
               </Button>
@@ -314,16 +318,29 @@ export default function ChatInput({
             <Button
               type="button"
               size="icon-sm"
-              onClick={() => void handleSend()}
-              disabled={disabled || isSubmitting || !canSend}
+              onClick={() => {
+                if (isStreaming) {
+                  onAbort?.();
+                  return;
+                }
+
+                void handleSend();
+              }}
+              disabled={disabled || isSubmitting || (!canSend && !isStreaming)}
               className={cn(
                 "transition-all",
-                !disabled && !isSubmitting && canSend
+                isStreaming
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : !disabled && !isSubmitting && canSend
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground",
               )}
             >
-              <ArrowUp className="size-4" />
+              {isStreaming ? (
+                <Square className="size-3.5 fill-current" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
             </Button>
           </div>
         </div>

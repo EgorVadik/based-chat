@@ -6,14 +6,12 @@ import ReactDOM from "react-dom/client";
 
 import { authClient } from "@/lib/auth-client";
 
-import Loader from "./components/loader";
 import { routeTree } from "./routeTree.gen";
 const convex = new ConvexReactClient(env.VITE_CONVEX_URL);
 
 const router = createRouter({
   routeTree,
   defaultPreload: "intent",
-  defaultPendingComponent: () => <Loader variant="shell" />,
   context: {},
   Wrap: function WrapComponent({ children }: { children: React.ReactNode }) {
     return (

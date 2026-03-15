@@ -4,7 +4,7 @@ import {
   type StreamId,
 } from '@convex-dev/persistent-text-streaming'
 import { ConvexError, v } from 'convex/values'
-import { streamText } from 'ai'
+import { generateText, streamText } from 'ai'
 
 import type { Id } from './_generated/dataModel'
 import { components, internal } from './_generated/api'
@@ -12,12 +12,13 @@ import {
   httpAction,
   internalMutation,
   internalQuery,
+  internalAction,
   mutation,
   query,
   type MutationCtx,
   type QueryCtx,
 } from './_generated/server'
-import { authComponent, createAuth } from './auth'
+import { authComponent } from './auth'
 import { getOpenRouterModelId, toModelMessages } from './llm'
 
 const attachmentValidator = v.object({
@@ -43,6 +44,14 @@ const persistentTextStreaming = new PersistentTextStreaming(
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
+const THREAD_TITLE_MODEL_ID = 'google/gemini-2.5-flash-lite'
+const internalMessages = internal.messages as unknown as {
+  applyGeneratedThreadTitle: any
+  generateThreadTitle: any
+  getStreamGenerationContext: any
+  getThreadTitleContext: any
+  markAssistantReplyError: any
+}
 
 async function resolveAttachments(
   ctx: QueryCtx | MutationCtx,
@@ -182,6 +191,50 @@ function deriveThreadTitle(content: string, attachments?: StoredAttachment[]) {
   }
 
   return 'New chat'
+}
+
+function formatThreadTitlePrompt(
+  content: string,
+  attachments: StoredAttachment[] | undefined,
+) {
+  const attachmentSummary =
+    attachments && attachments.length > 0
+      ? attachments
+          .map((attachment) => `${attachment.fileName} (${attachment.contentType})`)
+          .join(', ')
+      : 'None'
+
+  return [
+    'Generate a concise title for a chat thread.',
+    'Requirements:',
+    '- Maximum 6 words',
+    '- No quotation marks',
+    '- No trailing punctuation unless essential',
+    '- Focus on the user intent',
+    '- Return only the title',
+    '',
+    'First user message:',
+    content.trim() || '[No text]',
+    '',
+    `Attachments: ${attachmentSummary}`,
+  ].join('\n')
+}
+
+function sanitizeThreadTitle(title: string) {
+  const normalized = title
+    .replace(/^["'\s]+|["'\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) {
+    return null
+  }
+
+  if (normalized.length <= 60) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, 57).trimEnd()}...`
 }
 
 async function deleteMessageAttachments(
@@ -374,6 +427,174 @@ export const listUserAttachments = query({
   },
 })
 
+export const getThreadTitleContext = internalQuery({
+  args: {
+    threadId: v.id('threads'),
+    messageId: v.id('messages'),
+  },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.title !== 'New chat') {
+      return null
+    }
+
+    const firstUserMessage = await ctx.db
+      .query('messages')
+      .withIndex('by_threadId_createdAt', (q) => q.eq('threadId', args.threadId))
+      .order('asc')
+      .filter((q) => q.eq(q.field('role'), 'user'))
+      .first()
+
+    if (!firstUserMessage || firstUserMessage._id !== args.messageId) {
+      return null
+    }
+
+    return {
+      threadId: thread._id,
+      content: firstUserMessage.content,
+      attachments: firstUserMessage.attachments,
+    }
+  },
+})
+
+export const applyGeneratedThreadTitle = internalMutation({
+  args: {
+    threadId: v.id('threads'),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.title !== 'New chat') {
+      return null
+    }
+
+    const title = sanitizeThreadTitle(args.title)
+    if (!title) {
+      return null
+    }
+
+    await ctx.db.patch(args.threadId, {
+      title,
+      updatedAt: Date.now(),
+    })
+
+    return title
+  },
+})
+
+export const generateThreadTitle: any = internalAction({
+  args: {
+    threadId: v.id('threads'),
+    messageId: v.id('messages'),
+  },
+  handler: async (ctx, args): Promise<string | null> => {
+    const titleContext = await ctx.runQuery(
+      internalMessages.getThreadTitleContext,
+      args,
+    )
+
+    if (!titleContext) {
+      return null
+    }
+
+    let nextTitle = deriveThreadTitle(
+      titleContext.content,
+      titleContext.attachments,
+    )
+
+    try {
+      const result = await generateText({
+        model: openrouter(THREAD_TITLE_MODEL_ID),
+        prompt: formatThreadTitlePrompt(
+          titleContext.content,
+          titleContext.attachments,
+        ),
+      })
+
+      nextTitle = sanitizeThreadTitle(result.text) ?? nextTitle
+    } catch (error) {
+      console.error('[thread-title] generation-error', {
+        threadId: args.threadId,
+        messageId: args.messageId,
+        error: extractRawStreamErrorMessage(error),
+      })
+    }
+
+    return await ctx.runMutation(
+      internalMessages.applyGeneratedThreadTitle,
+      {
+        threadId: args.threadId,
+        title: nextTitle,
+      },
+    )
+  },
+})
+
+export const createThreadWithFirstMessage = mutation({
+  args: {
+    modelId: v.string(),
+    content: v.string(),
+    attachments: v.optional(v.array(attachmentValidator)),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx)
+    const content = args.content.trim()
+    const attachments = args.attachments ?? []
+
+    if (!content && attachments.length === 0) {
+      throw new ConvexError('Message content or an attachment is required')
+    }
+
+    const timestamp = Date.now()
+    const threadId = await ctx.db.insert('threads', {
+      userId: user._id,
+      title: 'New chat',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+
+    const messageId = await ctx.db.insert('messages', {
+      threadId,
+      userId: user._id,
+      role: 'user',
+      modelId: args.modelId,
+      content,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+
+    await ctx.scheduler.runAfter(
+      0,
+      internalMessages.generateThreadTitle,
+      {
+        threadId,
+        messageId,
+      },
+    )
+
+    return {
+      thread: {
+        _id: threadId,
+        title: 'New chat',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      message: await toClientMessage(ctx, {
+        _id: messageId,
+        threadId,
+        userId: user._id,
+        role: 'user',
+        modelId: args.modelId,
+        content,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    }
+  },
+})
+
 export const create = mutation({
   args: {
     threadId: v.id('threads'),
@@ -386,6 +607,11 @@ export const create = mutation({
     const { thread, user } = await getAuthorizedThread(ctx, args.threadId)
     const content = args.content.trim()
     const attachments = args.attachments ?? []
+    const firstMessage = await ctx.db
+      .query('messages')
+      .withIndex('by_threadId_createdAt', (q) => q.eq('threadId', args.threadId))
+      .order('asc')
+      .first()
 
     if (!content && attachments.length === 0) {
       throw new ConvexError('Message content or an attachment is required')
@@ -405,16 +631,26 @@ export const create = mutation({
 
     const threadPatch: {
       updatedAt: number
-      title?: string
     } = {
       updatedAt: timestamp,
     }
 
-    if (args.role === 'user' && thread.title === 'New chat') {
-      threadPatch.title = deriveThreadTitle(content, attachments)
-    }
-
     await ctx.db.patch(args.threadId, threadPatch)
+
+    if (
+      args.role === 'user' &&
+      thread.title === 'New chat' &&
+      !firstMessage
+    ) {
+      await ctx.scheduler.runAfter(
+        0,
+        internalMessages.generateThreadTitle,
+        {
+          threadId: args.threadId,
+          messageId,
+        },
+      )
+    }
 
     return await toClientMessage(ctx, {
       _id: messageId,
@@ -451,7 +687,7 @@ export const edit = mutation({
     attachments: v.optional(v.array(attachmentValidator)),
   },
   handler: async (ctx, args) => {
-    await getAuthorizedThread(ctx, args.threadId)
+    const { thread } = await getAuthorizedThread(ctx, args.threadId)
 
     const messages = await ctx.db
       .query('messages')
@@ -508,10 +744,18 @@ export const edit = mutation({
 
     await ctx.db.patch(args.threadId, {
       updatedAt: timestamp,
-      ...(targetIndex === 0
-        ? { title: deriveThreadTitle(content, nextAttachments) }
-        : {}),
     })
+
+    if (targetIndex === 0 && thread.title === 'New chat') {
+      await ctx.scheduler.runAfter(
+        0,
+        internalMessages.generateThreadTitle,
+        {
+          threadId: args.threadId,
+          messageId: args.messageId,
+        },
+      )
+    }
 
     return {
       updatedMessage: await toClientMessage(ctx, {
@@ -700,8 +944,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       userId: user._id,
     })
     generationContext = await ctx.runQuery(
-      (internal.messages as { getStreamGenerationContext: any })
-        .getStreamGenerationContext,
+      internalMessages.getStreamGenerationContext,
       { streamId },
     )
   } catch (error) {
@@ -743,6 +986,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
           const result = streamText({
             model: openrouter(modelId),
             messages: conversationMessages,
+            abortSignal: request.signal,
             onError({ error }) {
               rawStreamFailureMessage = extractRawStreamErrorMessage(error)
               streamFailureMessage = formatStreamErrorMessage(error)
@@ -794,8 +1038,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
           const rawErrorMessage =
             rawStreamFailureMessage ?? extractRawStreamErrorMessage(error)
           await _ctx.runMutation(
-            (internal.messages as { markAssistantReplyError: any })
-              .markAssistantReplyError,
+            internalMessages.markAssistantReplyError,
             {
               streamId,
               errorMessage,

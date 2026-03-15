@@ -19,6 +19,11 @@ type PersistentStreamState = PersistentBody & {
 
 const TERMINAL_STATUSES = new Set<StreamStatus>(["done", "error", "timeout"]);
 const PERSISTENCE_SETTLE_TIMEOUT_MS = 2500;
+const streamAbortControllers = new Map<StreamId, AbortController>();
+
+export function abortPersistentTextStream(streamId: StreamId) {
+  streamAbortControllers.get(streamId)?.abort();
+}
 
 export function usePersistentTextStream(
   getPersistentBody: FunctionReference<
@@ -203,12 +208,15 @@ async function startStreaming(
   streamId: StreamId,
   onUpdate: (text: string) => void,
 ): Promise<StreamStartResult> {
+  const abortController = new AbortController();
+  streamAbortControllers.set(streamId, abortController);
   const tokenResult = await authClient.convex.token({
     fetchOptions: { throw: false },
   });
   const accessToken = tokenResult.data?.token;
 
   if (!accessToken) {
+    streamAbortControllers.delete(streamId);
     return {
       ok: false,
       errorMessage: "Could not authenticate the streaming request.",
@@ -223,19 +231,24 @@ async function startStreaming(
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
+      signal: abortController.signal,
       body: JSON.stringify({ streamId }),
     });
   } catch (error) {
+    streamAbortControllers.delete(streamId);
     return {
       ok: false,
       errorMessage:
         error instanceof Error
-          ? error.message
+          ? error.name === "AbortError"
+            ? "Stopped generating."
+            : error.message
           : "Failed to reach the streaming endpoint.",
     };
   }
 
   if (response.status === 205) {
+    streamAbortControllers.delete(streamId);
     return { ok: true };
   }
 
@@ -272,14 +285,18 @@ async function startStreaming(
       }
 
       if (done) {
+        streamAbortControllers.delete(streamId);
         return { ok: true };
       }
     } catch (error) {
+      streamAbortControllers.delete(streamId);
       return {
         ok: false,
         errorMessage:
           error instanceof Error
-            ? error.message
+            ? error.name === "AbortError"
+              ? "Stopped generating."
+              : error.message
             : "The stream connection was interrupted.",
       };
     }

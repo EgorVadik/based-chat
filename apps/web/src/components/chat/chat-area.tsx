@@ -1,4 +1,5 @@
 import { Button } from "@based-chat/ui/components/button";
+import { Skeleton } from "@based-chat/ui/components/skeleton";
 import { SidebarTrigger } from "@based-chat/ui/components/sidebar";
 import { Separator } from "@based-chat/ui/components/separator";
 import { ArrowDown, Sparkles } from "lucide-react";
@@ -57,6 +58,26 @@ function EmptyState({ model }: { model: Model }) {
   );
 }
 
+function ThreadPendingState() {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center px-4">
+      <div className="w-full max-w-3xl space-y-4 rounded-3xl border border-border/50 bg-card/30 p-6 shadow-sm backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-32 rounded-full" />
+            <Skeleton className="h-3 w-24 rounded-full" />
+          </div>
+        </div>
+        <div className="space-y-3">
+          <Skeleton className="h-16 w-[82%] rounded-2xl" />
+          <Skeleton className="ml-auto h-12 w-[68%] rounded-2xl" />
+          <Skeleton className="h-24 w-[88%] rounded-2xl" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatArea({
   thread,
   messages,
@@ -68,7 +89,9 @@ export default function ChatArea({
   onSendMessage,
   onEditMessage,
   onRetryMessage,
+  onAbortStreaming,
   isStreaming,
+  isThreadPending = false,
 }: {
   thread: ThreadSummary | null;
   messages: ChatMessage[];
@@ -93,7 +116,9 @@ export default function ChatArea({
     attachments: ComposerAttachment[],
   ) => void | Promise<void>;
   onRetryMessage: (message: ChatMessage) => void | Promise<void>;
+  onAbortStreaming: () => void;
   isStreaming: boolean;
+  isThreadPending?: boolean;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -189,7 +214,7 @@ export default function ChatArea({
         <SidebarTrigger />
         <Separator orientation="vertical" className="h-4" />
         <span className="truncate text-xs font-medium text-muted-foreground">
-          {thread?.title || "New chat"}
+          {thread?.title || (isThreadPending ? "Opening chat" : "New chat")}
         </span>
       </div>
 
@@ -275,6 +300,8 @@ export default function ChatArea({
             </div>
           ) : null}
         </div>
+      ) : isThreadPending ? (
+        <ThreadPendingState />
       ) : (
         <EmptyState model={model} />
       )}
@@ -289,7 +316,8 @@ export default function ChatArea({
           await onSendMessage(message, attachments, uploadHandlers);
           setDraftMessage("");
         }}
-        disabled={isStreaming}
+        isStreaming={isStreaming}
+        onAbort={onAbortStreaming}
       />
     </div>
   );
