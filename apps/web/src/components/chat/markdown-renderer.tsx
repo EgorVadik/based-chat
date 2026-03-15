@@ -142,7 +142,7 @@ function MarkdownRenderer({
   className?: string;
 }) {
   return (
-    <div className={cn("markdown-body", className)}>
+    <div className={cn("markdown-body min-w-0 max-w-full", className)}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

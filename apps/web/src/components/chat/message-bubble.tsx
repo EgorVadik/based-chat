@@ -184,7 +184,7 @@ function MessageAttachmentGrid({
       {imageAttachments.length > 0 ? (
         <div
           className={cn(
-            'grid max-w-[min(36rem,72vw)] grid-cols-2 gap-2',
+            'grid max-w-full grid-cols-2 gap-2 sm:max-w-[min(36rem,72vw)]',
             imageAttachments.length === 1 && 'grid-cols-1',
           )}
         >
@@ -236,7 +236,7 @@ function MessageAttachmentGrid({
                 key={attachment.storageId}
                 type='button'
                 onClick={() => onOpen(attachment.storageId)}
-                className='flex min-w-48 max-w-[16rem] items-start gap-3 rounded-2xl border border-border/50 bg-card/50 px-3 py-2.5 text-left shadow-sm transition-transform hover:-translate-y-0.5'
+                className='flex w-full min-w-0 items-start gap-3 rounded-2xl border border-border/50 bg-card/50 px-3 py-2.5 text-left shadow-sm transition-transform hover:-translate-y-0.5 sm:min-w-48 sm:max-w-[16rem]'
               >
                 <div className='flex size-10 shrink-0 items-center justify-center rounded-2xl bg-muted/50 text-muted-foreground'>
                   <FileIcon className='size-4' />
@@ -431,8 +431,10 @@ function MessageBubble({
     >
       <div
         className={cn(
-          'group/message flex min-w-0 max-w-[85%] flex-col text-left',
-          isUser ? 'items-end' : 'items-start',
+          'group/message flex min-w-0 flex-col text-left',
+          isUser
+            ? 'max-w-full items-end sm:max-w-[85%]'
+            : 'w-full max-w-full items-start md:max-w-[85%]',
         )}
       >
         {isUser ? (
@@ -620,7 +622,7 @@ function MessageBubble({
             </div>
           </>
         ) : (
-          <div>
+          <div className='min-w-0 w-full'>
             {message.attachments.length > 0 ? (
               <div className='mb-3'>
                 <MessageAttachmentGrid
@@ -630,7 +632,7 @@ function MessageBubble({
               </div>
             ) : null}
             {reasoningText ? (
-              <div className='mb-4 w-full max-w-[min(56rem,86vw)]'>
+              <div className='mb-4 w-full max-w-full md:max-w-[min(56rem,86vw)]'>
                 <button
                   type='button'
                   onClick={() => setIsReasoningOpen((open) => !open)}
@@ -666,7 +668,10 @@ function MessageBubble({
             ) : null}
             {displayContent ? (
               <>
-                <MarkdownRenderer content={displayContent} />
+                <MarkdownRenderer
+                  content={displayContent}
+                  className='min-w-0 w-full max-w-full'
+                />
                 {hasStreamError ? (
                   <div className='mt-3 inline-flex max-w-full items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive/90'>
                     <span>

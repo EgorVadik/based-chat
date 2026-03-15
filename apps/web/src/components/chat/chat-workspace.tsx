@@ -8,6 +8,7 @@ import {
 } from '@based-chat/ui/components/sidebar'
 import { Navigate, useNavigate } from '@tanstack/react-router'
 import {
+  useAction,
   useConvex,
   useConvexAuth,
   useMutation,
@@ -25,6 +26,7 @@ import type {
 } from '@/lib/attachments'
 import AppSidebar from '@/components/chat/app-sidebar'
 import Loader from '@/components/loader'
+import { getStoredOpenRouterApiKey } from '@/lib/api-key-storage'
 import { toChatMessage, type ChatMessage } from '@/lib/chat'
 import { DEFAULT_MODEL, getModelById, type Model } from '@/lib/models'
 import { abortPersistentTextStream } from '@/lib/persistent-text-stream'
@@ -239,7 +241,8 @@ function areChatMessagesEqual(left: ChatMessage, right: ChatMessage) {
       right.generationStats?.tokensPerSecond &&
     left.generationStats?.costUsd === right.generationStats?.costUsd &&
     left.generationStats?.inputTokens === right.generationStats?.inputTokens &&
-    left.generationStats?.outputTokens === right.generationStats?.outputTokens &&
+    left.generationStats?.outputTokens ===
+      right.generationStats?.outputTokens &&
     left.generationStats?.totalTokens === right.generationStats?.totalTokens &&
     left.generationStats?.textTokens === right.generationStats?.textTokens &&
     left.generationStats?.reasoningTokens ===
@@ -254,7 +257,9 @@ function areChatMessageListsEqual(left: ChatMessage[], right: ChatMessage[]) {
     return false
   }
 
-  return left.every((message, index) => areChatMessagesEqual(message, right[index]!))
+  return left.every((message, index) =>
+    areChatMessagesEqual(message, right[index]!),
+  )
 }
 
 function withDisplayedDraftAttachmentUrls(
@@ -265,7 +270,7 @@ function withDisplayedDraftAttachmentUrls(
     ...attachment,
     url:
       attachment.kind === 'image'
-        ? draftAttachments[index]?.previewUrl ?? attachment.url
+        ? (draftAttachments[index]?.previewUrl ?? attachment.url)
         : attachment.url,
   }))
 }
@@ -299,26 +304,22 @@ export default function ChatWorkspace({
       ? { threadId: routeThreadId }
       : 'skip',
   )
-  const createMessage = useMutation((api.messages as { create: any }).create)
+  const createMessage = useMutation(api.messages.create)
   const createThreadWithFirstMessage = useMutation(
-    (api.messages as { createThreadWithFirstMessage: any })
-      .createThreadWithFirstMessage,
+    api.messages.createThreadWithFirstMessage,
   )
-  const importTemporaryThread = useMutation(
-    (api.messages as { importTemporaryThread: any }).importTemporaryThread,
-  )
+  const importTemporaryThread = useMutation(api.messages.importTemporaryThread)
   const renameThread = useMutation(api.threads.rename)
   const deleteManyThreads = useMutation(api.threads.deleteMany)
-  const editMessage = useMutation((api.messages as { edit: any }).edit)
-  const createAssistantReply = useMutation(
-    (api.messages as { createAssistantReply: any }).createAssistantReply,
+  const editMessage = useMutation(api.messages.edit)
+  const createAssistantReply = useMutation(api.messages.createAssistantReply)
+  const generateThreadTitle = useAction(
+    (api.messages as unknown as { generateThreadTitle: any })
+      .generateThreadTitle,
   )
-  const abortAssistantReply = useMutation(
-    (api.messages as { abortAssistantReply: any }).abortAssistantReply,
-  )
+  const abortAssistantReply = useMutation(api.messages.abortAssistantReply)
   const generateAttachmentUploadUrl = useMutation(
-    (api.messages as { generateAttachmentUploadUrl: any })
-      .generateAttachmentUploadUrl,
+    api.messages.generateAttachmentUploadUrl,
   )
   const [transientThread, setTransientThread] = useState<ThreadSummary | null>(
     null,
@@ -346,9 +347,9 @@ export default function ChatWorkspace({
       (storedModelId ? getModelById(storedModelId) : undefined) ?? DEFAULT_MODEL
     )
   })
-  const temporaryStreamRef = useRef<ReturnType<typeof startTemporaryChatStream> | null>(
-    null,
-  )
+  const temporaryStreamRef = useRef<ReturnType<
+    typeof startTemporaryChatStream
+  > | null>(null)
   const persistedActiveThreadId = routeThreadId ?? transientThread?._id ?? null
   const activeThreadId = temporary
     ? TEMPORARY_CHAT_THREAD_ID
@@ -415,7 +416,7 @@ export default function ChatWorkspace({
     () =>
       temporary
         ? temporaryChatState.thread
-        : allThreads.find((thread) => thread._id === activeThreadId) ?? null,
+        : (allThreads.find((thread) => thread._id === activeThreadId) ?? null),
     [activeThreadId, allThreads, temporary, temporaryChatState.thread],
   )
   const isThreadPending =
@@ -464,10 +465,16 @@ export default function ChatWorkspace({
     () =>
       temporary
         ? temporaryChatState.messages
-        : (activeThreadId ? messageCache[activeThreadId] : undefined) ??
+        : ((activeThreadId ? messageCache[activeThreadId] : undefined) ??
           mappedPersistedMessages ??
-          [],
-    [activeThreadId, mappedPersistedMessages, messageCache, temporary, temporaryChatState.messages],
+          []),
+    [
+      activeThreadId,
+      mappedPersistedMessages,
+      messageCache,
+      temporary,
+      temporaryChatState.messages,
+    ],
   )
 
   useEffect(() => {
@@ -496,12 +503,15 @@ export default function ChatWorkspace({
 
       return (
         messageCache[threadId] ??
-        (threadId === activeThreadId
-          ? mappedPersistedMessages
-          : [])
+        (threadId === activeThreadId ? mappedPersistedMessages : [])
       )
     },
-    [activeThreadId, mappedPersistedMessages, messageCache, temporaryChatState.messages],
+    [
+      activeThreadId,
+      mappedPersistedMessages,
+      messageCache,
+      temporaryChatState.messages,
+    ],
   )
 
   const appendCachedMessage = useCallback(
@@ -548,10 +558,7 @@ export default function ChatWorkspace({
   )
 
   const patchTemporaryMessage = useCallback(
-    (
-      messageId: string,
-      updater: (message: ChatMessage) => ChatMessage,
-    ) => {
+    (messageId: string, updater: (message: ChatMessage) => ChatMessage) => {
       setTemporaryChatState((currentState) => {
         let didUpdate = false
         const nextMessages = currentState.messages.map((message) => {
@@ -753,7 +760,9 @@ export default function ChatWorkspace({
         return nextCache
       })
       setStreamingThreadIds((currentThreadIds) =>
-        currentThreadIds.filter((currentThreadId) => currentThreadId !== threadId),
+        currentThreadIds.filter(
+          (currentThreadId) => currentThreadId !== threadId,
+        ),
       )
 
       if (activeThreadId === threadId || routeThreadId === threadId) {
@@ -770,7 +779,9 @@ export default function ChatWorkspace({
 
   const handleExportThreadAsMarkdown = useCallback(
     async (threadId: ThreadSummary['_id']) => {
-      const thread = allThreads.find((currentThread) => currentThread._id === threadId)
+      const thread = allThreads.find(
+        (currentThread) => currentThread._id === threadId,
+      )
       if (!thread) {
         throw new Error('Thread not found.')
       }
@@ -780,10 +791,10 @@ export default function ChatWorkspace({
         cachedMessages.length > 0
           ? cachedMessages
           : (
-              ((await convex.query(api.messages.listByThread, {
+              (await convex.query(api.messages.listByThread, {
                 threadId,
-              })) as PersistedMessagePayload[]).map(toChatMessage)
-            )
+              })) as PersistedMessagePayload[]
+            ).map(toChatMessage)
       const markdown = buildThreadMarkdown(thread, resolvedMessages)
 
       downloadMarkdownFile(
@@ -829,7 +840,9 @@ export default function ChatWorkspace({
     }
 
     if (streamingThreadIds.includes(TEMPORARY_CHAT_THREAD_ID)) {
-      throw new Error('Wait for the temporary reply to finish before storing it.')
+      throw new Error(
+        'Wait for the temporary reply to finish before storing it.',
+      )
     }
 
     const importResult = (await importTemporaryThread({
@@ -860,6 +873,25 @@ export default function ChatWorkspace({
       ...currentCache,
       [importResult.thread._id]: importResult.messages.map(toChatMessage),
     }))
+    const firstImportedUserMessage = importResult.messages.find(
+      (message) => message.role === 'user',
+    )
+    if (firstImportedUserMessage) {
+      const apiKey = getStoredOpenRouterApiKey()
+      if (apiKey) {
+        void generateThreadTitle({
+          threadId: importResult.thread._id,
+          messageId: firstImportedUserMessage._id,
+          apiKey,
+        }).catch((error) => {
+          console.error('[thread-title] request-failed', {
+            threadId: importResult.thread._id,
+            messageId: firstImportedUserMessage._id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+      }
+    }
     setTemporaryChatState(resetTemporaryChatState())
     void navigate({
       to: '/chat/$threadId',
@@ -868,7 +900,13 @@ export default function ChatWorkspace({
       },
     })
     toast.success('Temporary chat saved to your history.')
-  }, [importTemporaryThread, navigate, streamingThreadIds, temporaryChatState.messages])
+  }, [
+    generateThreadTitle,
+    importTemporaryThread,
+    navigate,
+    streamingThreadIds,
+    temporaryChatState.messages,
+  ])
 
   const handleModelChange = useCallback((model: Model) => {
     setSelectedModel(model)
@@ -988,6 +1026,43 @@ export default function ChatWorkspace({
     [generateAttachmentUploadUrl],
   )
 
+  const ensureOpenRouterApiKey = useCallback(() => {
+    const apiKey = getStoredOpenRouterApiKey()
+
+    if (!apiKey) {
+      toast.error(
+        'An OpenRouter API key is required. Add it in Settings > API Keys.',
+      )
+      return null
+    }
+
+    return apiKey
+  }, [])
+
+  const requestThreadTitleGeneration = useCallback(
+    async (threadId: ThreadSummary['_id'], messageId: Id<'messages'>) => {
+      const apiKey = getStoredOpenRouterApiKey()
+      if (!apiKey) {
+        return
+      }
+
+      try {
+        await generateThreadTitle({
+          threadId,
+          messageId,
+          apiKey,
+        })
+      } catch (error) {
+        console.error('[thread-title] request-failed', {
+          threadId,
+          messageId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+    [generateThreadTitle],
+  )
+
   const startAssistantReply = useCallback(
     async ({
       threadId,
@@ -1000,6 +1075,10 @@ export default function ChatWorkspace({
       userMessageUpdatedAt: number
       model: Model
     }) => {
+      if (!ensureOpenRouterApiKey()) {
+        return
+      }
+
       const createdAssistantMessage = (await createAssistantReply({
         threadId,
         userMessageId,
@@ -1029,7 +1108,12 @@ export default function ChatWorkspace({
       })
       markDrivenStreamMessage(threadId, createdAssistantMessage._id)
     },
-    [appendCachedMessage, createAssistantReply, markDrivenStreamMessage],
+    [
+      appendCachedMessage,
+      createAssistantReply,
+      ensureOpenRouterApiKey,
+      markDrivenStreamMessage,
+    ],
   )
 
   const startTemporaryAssistantReply = useCallback(
@@ -1040,6 +1124,10 @@ export default function ChatWorkspace({
       model: Model
       conversationMessages: ChatMessage[]
     }) => {
+      if (!ensureOpenRouterApiKey()) {
+        return
+      }
+
       const assistantMessageId = createTemporaryMessageId()
       const assistantMessage: ChatMessage = {
         id: assistantMessageId,
@@ -1062,17 +1150,19 @@ export default function ChatWorkspace({
       const stream = startTemporaryChatStream({
         url: temporaryStreamUrl,
         modelId: model.id,
-        messages: conversationMessages.map<TemporaryStreamMessage>((message) => ({
-          role: message.role,
-          content: message.content,
-          attachments: message.attachments.map((attachment) => ({
-            kind: attachment.kind,
-            storageId: attachment.storageId,
-            fileName: attachment.fileName,
-            contentType: attachment.contentType,
-            size: attachment.size,
-          })),
-        })),
+        messages: conversationMessages.map<TemporaryStreamMessage>(
+          (message) => ({
+            role: message.role,
+            content: message.content,
+            attachments: message.attachments.map((attachment) => ({
+              kind: attachment.kind,
+              storageId: attachment.storageId,
+              fileName: attachment.fileName,
+              contentType: attachment.contentType,
+              size: attachment.size,
+            })),
+          }),
+        ),
         onTextDelta: (text) => {
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
@@ -1085,7 +1175,10 @@ export default function ChatWorkspace({
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
             reasoningText: `${message.reasoningText ?? ''}${text}`,
-            streamStatus: message.streamStatus === 'pending' ? 'streaming' : message.streamStatus,
+            streamStatus:
+              message.streamStatus === 'pending'
+                ? 'streaming'
+                : message.streamStatus,
             updatedAt: Date.now(),
           }))
         },
@@ -1121,6 +1214,7 @@ export default function ChatWorkspace({
     [
       addStreamingThread,
       appendCachedMessage,
+      ensureOpenRouterApiKey,
       patchTemporaryMessage,
       removeStreamingThread,
       temporaryStreamUrl,
@@ -1140,6 +1234,10 @@ export default function ChatWorkspace({
       const draftAttachments = attachments
 
       if (!trimmedContent && draftAttachments.length === 0) {
+        return
+      }
+
+      if (!ensureOpenRouterApiKey()) {
         return
       }
 
@@ -1258,13 +1356,26 @@ export default function ChatWorkspace({
         })
       }
 
-      await startAssistantReply({
+      const replyRequest = startAssistantReply({
         threadId,
         userMessageId: createdUserMessage._id,
         userMessageUpdatedAt:
           createdUserMessage.updatedAt ?? createdUserMessage.createdAt,
         model: modelForMessage,
       })
+
+      if (createdThread) {
+        await Promise.all([
+          replyRequest,
+          requestThreadTitleGeneration(
+            createdThread._id,
+            createdUserMessage._id,
+          ),
+        ])
+        return
+      }
+
+      await replyRequest
     },
     [
       activeThreadId,
@@ -1272,8 +1383,10 @@ export default function ChatWorkspace({
       createMessage,
       createThreadWithFirstMessage,
       currentModel,
+      ensureOpenRouterApiKey,
       getThreadMessages,
       navigate,
+      requestThreadTitleGeneration,
       startAssistantReply,
       startTemporaryAssistantReply,
       streamingThreadIds,
@@ -1295,12 +1408,24 @@ export default function ChatWorkspace({
       nextModel: Model
       attachments: MessageAttachment[]
     }) => {
+      if (!ensureOpenRouterApiKey()) {
+        return
+      }
+
       const trimmedContent = content.trim()
       const threadId = message.threadId
 
       if ((!trimmedContent && attachments.length === 0) || !threadId) {
         return
       }
+
+      const shouldRequestTitleGeneration =
+        !isTemporaryThreadId(threadId) &&
+        allThreads.find((thread) => thread._id === threadId)?.title ===
+          'New chat' &&
+        getThreadMessages(threadId).find(
+          (threadMessage) => threadMessage.role === 'user',
+        )?.id === message.id
 
       if (isTemporaryThreadId(threadId)) {
         let nextMessages: ChatMessage[] = []
@@ -1418,7 +1543,7 @@ export default function ChatWorkspace({
       })
 
       setSelectedModel(nextModel)
-      await startAssistantReply({
+      const replyRequest = startAssistantReply({
         threadId,
         userMessageId: editResult.updatedMessage._id,
         userMessageUpdatedAt:
@@ -1426,11 +1551,25 @@ export default function ChatWorkspace({
           editResult.updatedMessage.createdAt,
         model: nextModel,
       })
+
+      if (shouldRequestTitleGeneration) {
+        await Promise.all([
+          replyRequest,
+          requestThreadTitleGeneration(threadId, editResult.updatedMessage._id),
+        ])
+        return
+      }
+
+      await replyRequest
     },
     [
       activeThreadId,
+      allThreads,
       editMessage,
+      ensureOpenRouterApiKey,
+      getThreadMessages,
       mappedPersistedMessages,
+      requestThreadTitleGeneration,
       startAssistantReply,
       startTemporaryAssistantReply,
     ],
@@ -1443,6 +1582,10 @@ export default function ChatWorkspace({
       nextModel: Model,
       attachments: ComposerAttachment[],
     ) => {
+      if (!ensureOpenRouterApiKey()) {
+        return
+      }
+
       const uploadedAttachments = await uploadAttachments(
         attachments.filter(
           (attachment): attachment is DraftAttachment =>
@@ -1474,7 +1617,7 @@ export default function ChatWorkspace({
         attachments: [...persistedAttachments, ...displayedUploadedAttachments],
       })
     },
-    [restartFromUserMessage, uploadAttachments],
+    [ensureOpenRouterApiKey, restartFromUserMessage, uploadAttachments],
   )
 
   const handleRetryMessage = useCallback(
@@ -1544,7 +1687,12 @@ export default function ChatWorkspace({
       streamId: pendingAssistantMessage.streamId,
     })
     abortPersistentTextStream(pendingAssistantMessage.streamId as StreamId)
-  }, [abortAssistantReply, activeMessages, activeThreadId, removeStreamingThread])
+  }, [
+    abortAssistantReply,
+    activeMessages,
+    activeThreadId,
+    removeStreamingThread,
+  ])
 
   const activeThreadIsStreaming = Boolean(
     activeThreadId &&

@@ -132,7 +132,8 @@
 
 /* Markdown prose styles for AI chat messages */
 .markdown-body {
-  @apply text-sm leading-relaxed;
+  @apply w-full max-w-full text-sm leading-relaxed break-words;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body p {
@@ -185,7 +186,7 @@
 }
 
 .markdown-body table {
-  @apply mb-3 w-full text-sm border-collapse overflow-hidden rounded-lg last:mb-0;
+  @apply mb-3 block w-full max-w-full overflow-x-auto text-sm border-collapse rounded-lg last:mb-0;
 }
 
 .markdown-body thead th {
@@ -214,7 +215,7 @@
 
 /* Shiki syntax highlighting overrides */
 .shiki-container pre.shiki {
-  @apply !m-0 !rounded-none px-4 py-3.5 font-mono text-[13px] leading-relaxed overflow-x-auto;
+  @apply !m-0 !max-w-full !rounded-none overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-relaxed;
 }
 
 .shiki-container pre.shiki code {

@@ -2,6 +2,7 @@ import type { Id } from '@based-chat/backend/convex/_generated/dataModel'
 import { env } from '@based-chat/env/web'
 
 import type { MessageAttachment } from '@/lib/attachments'
+import { getStoredOpenRouterApiKey } from '@/lib/api-key-storage'
 import { authClient } from '@/lib/auth-client'
 import type { ChatMessage, MessageGenerationStats } from '@/lib/chat'
 import { getModelById } from '@/lib/models'
@@ -197,6 +198,7 @@ export function startTemporaryChatStream({
 
     let response: Response
     try {
+      const apiKey = getStoredOpenRouterApiKey()
       response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -205,6 +207,7 @@ export function startTemporaryChatStream({
         },
         signal: abortController.signal,
         body: JSON.stringify({
+          apiKey: apiKey || undefined,
           modelId,
           messages,
         }),

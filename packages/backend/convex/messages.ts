@@ -10,10 +10,10 @@ import type { Id } from './_generated/dataModel'
 import { components, internal } from './_generated/api'
 import {
   type ActionCtx,
+  action,
   httpAction,
   internalMutation,
   internalQuery,
-  internalAction,
   mutation,
   query,
   type MutationCtx,
@@ -113,10 +113,6 @@ const persistentTextStreaming = new PersistentTextStreaming(
   (components as typeof components & { persistentTextStreaming: any })
     .persistentTextStreaming,
 )
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY,
-})
-const THREAD_TITLE_MODEL_ID = 'google/gemini-2.5-flash-lite'
 type StreamEvent =
   | {
       type: 'text-delta'
@@ -135,10 +131,11 @@ type StreamEvent =
       generationStats?: GenerationStats
     }
 
+const THREAD_TITLE_MODEL_ID = 'google/gemini-2.5-flash-lite'
+
 const internalMessages = internal.messages as unknown as {
   getAssistantReplyStopState: any
   applyGeneratedThreadTitle: any
-  generateThreadTitle: any
   getStreamGenerationContext: any
   getTemporaryStreamSystemPrompt: any
   getThreadTitleContext: any
@@ -330,6 +327,23 @@ function extractOpenRouterCostUsd(providerMetadata: unknown) {
   )
 }
 
+function resolveOpenRouterApiKey(requestApiKey?: string) {
+  const normalizedRequestApiKey = requestApiKey?.trim()
+  return normalizedRequestApiKey || null
+}
+
+function getOpenRouter(requestApiKey?: string) {
+  const apiKey = resolveOpenRouterApiKey(requestApiKey)
+
+  if (!apiKey) {
+    throw new Error(
+      'An OpenRouter API key is required. Add it in Settings > API Keys and try again.',
+    )
+  }
+
+  return createOpenRouter({ apiKey })
+}
+
 function shouldPersistChunk(text: string) {
   return text.includes('.') || text.includes('!') || text.includes('?')
 }
@@ -362,7 +376,7 @@ function formatStreamErrorMessage(error: unknown) {
     normalized.includes('unauthorized') ||
     normalized.includes('forbidden')
   ) {
-    return 'Your session expired. Please sign in again and retry.'
+    return 'The AI provider rejected the API key or request. Check your OpenRouter key and try again.'
   }
 
   if (normalized.includes('timeout') || normalized.includes('timed out')) {
@@ -703,10 +717,15 @@ export const getThreadTitleContext = internalQuery({
   args: {
     threadId: v.id('threads'),
     messageId: v.id('messages'),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.title !== 'New chat') {
+    if (
+      !thread ||
+      thread.title !== 'New chat' ||
+      thread.userId !== args.userId
+    ) {
       return null
     }
 
@@ -756,15 +775,25 @@ export const applyGeneratedThreadTitle = internalMutation({
   },
 })
 
-export const generateThreadTitle: any = internalAction({
+export const generateThreadTitle: any = action({
   args: {
     threadId: v.id('threads'),
     messageId: v.id('messages'),
+    apiKey: v.string(),
   },
   handler: async (ctx, args): Promise<string | null> => {
+    const user = await authComponent.safeGetAuthUser(ctx)
+    if (!user) {
+      throw new ConvexError('Not authenticated')
+    }
+
     const titleContext = await ctx.runQuery(
       internalMessages.getThreadTitleContext,
-      args,
+      {
+        threadId: args.threadId,
+        messageId: args.messageId,
+        userId: user._id,
+      },
     )
 
     if (!titleContext) {
@@ -778,7 +807,7 @@ export const generateThreadTitle: any = internalAction({
 
     try {
       const result = await generateText({
-        model: openrouter(THREAD_TITLE_MODEL_ID),
+        model: getOpenRouter(args.apiKey)(THREAD_TITLE_MODEL_ID),
         prompt: formatThreadTitlePrompt(
           titleContext.content,
           titleContext.attachments,
@@ -835,11 +864,6 @@ export const createThreadWithFirstMessage = mutation({
       updatedAt: timestamp,
     })
 
-    await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
-      threadId,
-      messageId,
-    })
-
     return {
       thread: {
         _id: threadId,
@@ -878,9 +902,6 @@ export const importTemporaryThread = mutation({
       (left, right) =>
         left.createdAt - right.createdAt ||
         (left.updatedAt ?? left.createdAt) - (right.updatedAt ?? right.createdAt),
-    )
-    const firstUserMessageInput = sortedMessages.find(
-      (message) => message.role === 'user',
     )
     const lastMessage = sortedMessages[sortedMessages.length - 1]
     const threadCreatedAt = sortedMessages[0]?.createdAt ?? Date.now()
@@ -935,21 +956,6 @@ export const importTemporaryThread = mutation({
       }),
     )
 
-    if (firstUserMessageInput) {
-      const firstUserMessage = persistedMessages.find(
-        (message) =>
-          message.role === 'user' &&
-          message.createdAt === firstUserMessageInput.createdAt,
-      )
-
-      if (firstUserMessage) {
-        await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
-          threadId,
-          messageId: firstUserMessage._id,
-        })
-      }
-    }
-
     return {
       thread: {
         _id: threadId,
@@ -971,16 +977,9 @@ export const create = mutation({
     attachments: v.optional(v.array(attachmentValidator)),
   },
   handler: async (ctx, args) => {
-    const { thread, user } = await getAuthorizedThread(ctx, args.threadId)
+    const { user } = await getAuthorizedThread(ctx, args.threadId)
     const content = args.content.trim()
     const attachments = args.attachments ?? []
-    const firstMessage = await ctx.db
-      .query('messages')
-      .withIndex('by_threadId_createdAt', (q) =>
-        q.eq('threadId', args.threadId),
-      )
-      .order('asc')
-      .first()
 
     if (!content && attachments.length === 0) {
       throw new ConvexError('Message content or an attachment is required')
@@ -1005,13 +1004,6 @@ export const create = mutation({
     }
 
     await ctx.db.patch(args.threadId, threadPatch)
-
-    if (args.role === 'user' && thread.title === 'New chat' && !firstMessage) {
-      await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
-        threadId: args.threadId,
-        messageId,
-      })
-    }
 
     return await toClientMessage(ctx, {
       _id: messageId,
@@ -1048,7 +1040,7 @@ export const edit = mutation({
     attachments: v.optional(v.array(attachmentValidator)),
   },
   handler: async (ctx, args) => {
-    const { thread } = await getAuthorizedThread(ctx, args.threadId)
+    await getAuthorizedThread(ctx, args.threadId)
 
     const messages = await ctx.db
       .query('messages')
@@ -1106,13 +1098,6 @@ export const edit = mutation({
     await ctx.db.patch(args.threadId, {
       updatedAt: timestamp,
     })
-
-    if (targetIndex === 0 && thread.title === 'New chat') {
-      await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
-        threadId: args.threadId,
-        messageId: args.messageId,
-      })
-    }
 
     return {
       updatedMessage: await toClientMessage(ctx, {
@@ -1339,12 +1324,22 @@ function applyCorsHeaders(response: Response, request: Request) {
 }
 
 export const streamAssistantReply = httpAction(async (ctx, request) => {
-  const { streamId } = (await request.json()) as { streamId?: string }
+  const payload = (await request.json()) as {
+    streamId?: string
+    apiKey?: string
+  }
+  const streamId = payload.streamId
+  const requestApiKey =
+    typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0
+      ? payload.apiKey.trim()
+      : undefined
   const hasAuthorizationHeader = Boolean(request.headers.get('authorization'))
+  const hasOpenRouterApiKey = Boolean(resolveOpenRouterApiKey(requestApiKey))
 
   console.log('[stream:http] request', {
     streamId,
     hasAuthorizationHeader,
+    hasOpenRouterApiKey,
     origin: request.headers.get('origin'),
   })
 
@@ -1414,12 +1409,30 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
     ),
   )
   const modelId = getOpenRouterModelId(generationContext.modelId)
+  let openrouter: ReturnType<typeof createOpenRouter>
+  try {
+    openrouter = getOpenRouter(requestApiKey)
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'An OpenRouter API key is required. Add it in Settings > API Keys and try again.'
+
+    console.warn('[stream:http] missing-provider-key', {
+      streamId,
+      userId: user._id,
+      modelId,
+    })
+
+    return applyCorsHeaders(new Response(errorMessage, { status: 400 }), request)
+  }
 
   console.log('[stream:http] generation-start', {
     streamId,
     userId: user._id,
     modelId,
     messageCount: conversationMessages.length,
+    hasOpenRouterApiKey,
   })
 
   const streamState = await ctx.runQuery(
@@ -1761,7 +1774,12 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
   const payload = (await request.json()) as {
     modelId?: string
     messages?: unknown
+    apiKey?: string
   }
+  const requestApiKey =
+    typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0
+      ? payload.apiKey.trim()
+      : undefined
 
   if (
     typeof payload.modelId !== 'string' ||
@@ -1804,6 +1822,16 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
     ),
   )
   const modelId = getOpenRouterModelId(payload.modelId)
+  let openrouter: ReturnType<typeof createOpenRouter>
+  try {
+    openrouter = getOpenRouter(requestApiKey)
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'An OpenRouter API key is required. Add it in Settings > API Keys and try again.'
+    return applyCorsHeaders(new Response(errorMessage, { status: 400 }), request)
+  }
 
   let response: Response
   try {

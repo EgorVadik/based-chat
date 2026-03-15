@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 
+import { getStoredOpenRouterApiKey } from "@/lib/api-key-storage";
 import { authClient } from "@/lib/auth-client";
 
 type PersistentBody = StreamBody & {
@@ -319,6 +320,7 @@ async function startStreaming(
 
   let response: Response;
   try {
+    const apiKey = getStoredOpenRouterApiKey();
     response = await fetch(url, {
       method: "POST",
       headers: {
@@ -326,7 +328,10 @@ async function startStreaming(
         "Content-Type": "application/json",
       },
       signal: abortController.signal,
-      body: JSON.stringify({ streamId }),
+      body: JSON.stringify({
+        streamId,
+        apiKey: apiKey || undefined,
+      }),
     });
   } catch (error) {
     streamAbortControllers.delete(streamId);
