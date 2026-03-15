@@ -28,6 +28,19 @@ import { toChatMessage, type ChatMessage } from '@/lib/chat'
 import { DEFAULT_MODEL, getModelById, type Model } from '@/lib/models'
 import { abortPersistentTextStream } from '@/lib/persistent-text-stream'
 import type { ThreadSummary } from '@/lib/threads'
+import {
+  TEMPORARY_CHAT_ROUTE,
+  TEMPORARY_CHAT_THREAD_ID,
+  createTemporaryMessageId,
+  getTemporaryChatStreamUrl,
+  isTemporaryThreadId,
+  loadTemporaryChatState,
+  persistTemporaryChatState,
+  resetTemporaryChatState,
+  startTemporaryChatStream,
+  type TemporaryChatState,
+  type TemporaryStreamMessage,
+} from '@/lib/temporary-chat'
 
 import ChatArea from './chat-area'
 
@@ -156,10 +169,25 @@ function areChatMessageListsEqual(left: ChatMessage[], right: ChatMessage[]) {
   return left.every((message, index) => areChatMessagesEqual(message, right[index]!))
 }
 
+function withDisplayedDraftAttachmentUrls(
+  uploadedAttachments: MessageAttachment[],
+  draftAttachments: DraftAttachment[],
+) {
+  return uploadedAttachments.map((attachment, index) => ({
+    ...attachment,
+    url:
+      attachment.kind === 'image'
+        ? draftAttachments[index]?.previewUrl ?? attachment.url
+        : attachment.url,
+  }))
+}
+
 export default function ChatWorkspace({
   routeThreadId = null,
+  temporary = false,
 }: {
   routeThreadId?: Id<'threads'> | null
+  temporary?: boolean
 }) {
   const navigate = useNavigate()
   const convex = useConvex()
@@ -179,7 +207,9 @@ export default function ChatWorkspace({
   )
   const activeThreadQuery = useQuery(
     api.threads.get,
-    isAuthenticated && routeThreadId ? { threadId: routeThreadId } : 'skip',
+    isAuthenticated && routeThreadId && !temporary
+      ? { threadId: routeThreadId }
+      : 'skip',
   )
   const createMessage = useMutation((api.messages as { create: any }).create)
   const createThreadWithFirstMessage = useMutation(
@@ -209,6 +239,8 @@ export default function ChatWorkspace({
   const [messageCache, setMessageCache] = useState<
     Record<string, ChatMessage[] | undefined>
   >(() => chatWorkspaceSnapshot.messageCache)
+  const [temporaryChatState, setTemporaryChatState] =
+    useState<TemporaryChatState>(loadTemporaryChatState)
   const [selectedModel, setSelectedModel] = useState<Model>(() => {
     if (typeof window === 'undefined') {
       return DEFAULT_MODEL
@@ -221,10 +253,18 @@ export default function ChatWorkspace({
       (storedModelId ? getModelById(storedModelId) : undefined) ?? DEFAULT_MODEL
     )
   })
-  const activeThreadId = routeThreadId ?? transientThread?._id ?? null
+  const temporaryStreamRef = useRef<ReturnType<typeof startTemporaryChatStream> | null>(
+    null,
+  )
+  const persistedActiveThreadId = routeThreadId ?? transientThread?._id ?? null
+  const activeThreadId = temporary
+    ? TEMPORARY_CHAT_THREAD_ID
+    : persistedActiveThreadId
   const persistedMessages = useQuery(
     api.messages.listByThread,
-    isAuthenticated && activeThreadId ? { threadId: activeThreadId } : 'skip',
+    isAuthenticated && persistedActiveThreadId && !temporary
+      ? { threadId: persistedActiveThreadId }
+      : 'skip',
   )
   const mappedPersistedMessages = useMemo(
     () =>
@@ -245,6 +285,10 @@ export default function ChatWorkspace({
   }, [routeThreadId])
 
   useEffect(() => {
+    persistTemporaryChatState(temporaryChatState)
+  }, [temporaryChatState])
+
+  useEffect(() => {
     window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, selectedModel.id)
   }, [selectedModel])
 
@@ -260,7 +304,7 @@ export default function ChatWorkspace({
       ? chatWorkspaceSnapshot.threads
       : threads
   const resolvedActiveThreadQuery =
-    activeThreadQuery === undefined && routeThreadId
+    activeThreadQuery === undefined && routeThreadId && !temporary
       ? chatWorkspaceSnapshot.threads.find(
           (thread) => thread._id === routeThreadId,
         )
@@ -275,10 +319,14 @@ export default function ChatWorkspace({
   )
   const resolvedUser = user ?? chatWorkspaceSnapshot.user
   const activeThread = useMemo(
-    () => allThreads.find((thread) => thread._id === activeThreadId) ?? null,
-    [activeThreadId, allThreads],
+    () =>
+      temporary
+        ? temporaryChatState.thread
+        : allThreads.find((thread) => thread._id === activeThreadId) ?? null,
+    [activeThreadId, allThreads, temporary, temporaryChatState.thread],
   )
   const isThreadPending =
+    !temporary &&
     Boolean(routeThreadId) &&
     activeThreadQuery === undefined &&
     !messageCache[routeThreadId ?? '']
@@ -287,6 +335,7 @@ export default function ChatWorkspace({
     () => new URL('/messages/stream', env.VITE_CONVEX_SITE_URL),
     [],
   )
+  const temporaryStreamUrl = useMemo(() => getTemporaryChatStreamUrl(), [])
 
   useEffect(() => {
     if (!activeThreadId || persistedMessages === undefined) {
@@ -320,10 +369,12 @@ export default function ChatWorkspace({
 
   const activeMessages = useMemo(
     () =>
-      (activeThreadId ? messageCache[activeThreadId] : undefined) ??
-      mappedPersistedMessages ??
-      [],
-    [activeThreadId, mappedPersistedMessages, messageCache],
+      temporary
+        ? temporaryChatState.messages
+        : (activeThreadId ? messageCache[activeThreadId] : undefined) ??
+          mappedPersistedMessages ??
+          [],
+    [activeThreadId, mappedPersistedMessages, messageCache, temporary, temporaryChatState.messages],
   )
 
   useEffect(() => {
@@ -345,16 +396,44 @@ export default function ChatWorkspace({
   }, [activeMessages, activeThreadId])
 
   const getThreadMessages = useCallback(
-    (threadId: ThreadSummary['_id']) =>
-      messageCache[threadId] ??
-      (threadId === activeThreadId
-        ? mappedPersistedMessages
-        : []),
-    [activeThreadId, mappedPersistedMessages, messageCache],
+    (threadId: ThreadSummary['_id']) => {
+      if (isTemporaryThreadId(threadId)) {
+        return temporaryChatState.messages
+      }
+
+      return (
+        messageCache[threadId] ??
+        (threadId === activeThreadId
+          ? mappedPersistedMessages
+          : [])
+      )
+    },
+    [activeThreadId, mappedPersistedMessages, messageCache, temporaryChatState.messages],
   )
 
   const appendCachedMessage = useCallback(
     (threadId: ThreadSummary['_id'], message: ChatMessage) => {
+      if (isTemporaryThreadId(threadId)) {
+        setTemporaryChatState((currentState) => {
+          if (
+            currentState.messages.some(
+              (currentMessage) => currentMessage.id === message.id,
+            )
+          ) {
+            return currentState
+          }
+
+          return {
+            thread: {
+              ...currentState.thread,
+              updatedAt: message.updatedAt ?? message.createdAt,
+            },
+            messages: [...currentState.messages, message],
+          }
+        })
+        return
+      }
+
       setMessageCache((currentCache) => {
         const currentMessages = currentCache[threadId] ?? []
 
@@ -369,6 +448,40 @@ export default function ChatWorkspace({
         return {
           ...currentCache,
           [threadId]: [...currentMessages, message],
+        }
+      })
+    },
+    [],
+  )
+
+  const patchTemporaryMessage = useCallback(
+    (
+      messageId: string,
+      updater: (message: ChatMessage) => ChatMessage,
+    ) => {
+      setTemporaryChatState((currentState) => {
+        let didUpdate = false
+        const nextMessages = currentState.messages.map((message) => {
+          if (message.id !== messageId) {
+            return message
+          }
+
+          didUpdate = true
+          return updater(message)
+        })
+
+        if (!didUpdate) {
+          return currentState
+        }
+
+        const lastMessage = nextMessages.at(-1)
+        return {
+          thread: {
+            ...currentState.thread,
+            updatedAt:
+              lastMessage?.updatedAt ?? lastMessage?.createdAt ?? Date.now(),
+          },
+          messages: nextMessages,
         }
       })
     },
@@ -484,6 +597,19 @@ export default function ChatWorkspace({
     void navigate({ to: '/' })
   }, [navigate])
 
+  const handleSelectTemporaryChat = useCallback(() => {
+    void navigate({ to: TEMPORARY_CHAT_ROUTE })
+  }, [navigate])
+
+  const handleStartTemporaryChat = useCallback(() => {
+    temporaryStreamRef.current?.abort()
+    temporaryStreamRef.current = null
+    setDrivenStreamMessageIds([])
+    setStreamingThreadIds([])
+    setTemporaryChatState(resetTemporaryChatState())
+    void navigate({ to: TEMPORARY_CHAT_ROUTE })
+  }, [navigate])
+
   const handleSelectThread = useCallback(
     (threadId: ThreadSummary['_id']) => {
       void navigate({
@@ -508,6 +634,10 @@ export default function ChatWorkspace({
 
   const handlePrefetchThread = useCallback(
     (threadId: ThreadSummary['_id']) => {
+      if (isTemporaryThreadId(threadId)) {
+        return
+      }
+
       if (
         messageCache[threadId] ||
         prefetchedThreadIdsRef.current.has(threadId)
@@ -654,6 +784,101 @@ export default function ChatWorkspace({
     [appendCachedMessage, createAssistantReply, markDrivenStreamMessage],
   )
 
+  const startTemporaryAssistantReply = useCallback(
+    async ({
+      model,
+      conversationMessages,
+    }: {
+      model: Model
+      conversationMessages: ChatMessage[]
+    }) => {
+      const assistantMessageId = createTemporaryMessageId()
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        threadId: TEMPORARY_CHAT_THREAD_ID,
+        role: 'system',
+        content: '',
+        reasoningText: '',
+        attachments: [],
+        modelId: model.id,
+        model,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        streamStatus: 'pending',
+      }
+
+      appendCachedMessage(TEMPORARY_CHAT_THREAD_ID, assistantMessage)
+      addStreamingThread(TEMPORARY_CHAT_THREAD_ID)
+
+      temporaryStreamRef.current?.abort()
+      const stream = startTemporaryChatStream({
+        url: temporaryStreamUrl,
+        modelId: model.id,
+        messages: conversationMessages.map<TemporaryStreamMessage>((message) => ({
+          role: message.role,
+          content: message.content,
+          attachments: message.attachments.map((attachment) => ({
+            kind: attachment.kind,
+            storageId: attachment.storageId,
+            fileName: attachment.fileName,
+            contentType: attachment.contentType,
+            size: attachment.size,
+          })),
+        })),
+        onTextDelta: (text) => {
+          patchTemporaryMessage(assistantMessageId, (message) => ({
+            ...message,
+            content: message.content + text,
+            streamStatus: 'streaming',
+            updatedAt: Date.now(),
+          }))
+        },
+        onReasoningDelta: (text) => {
+          patchTemporaryMessage(assistantMessageId, (message) => ({
+            ...message,
+            reasoningText: `${message.reasoningText ?? ''}${text}`,
+            streamStatus: message.streamStatus === 'pending' ? 'streaming' : message.streamStatus,
+            updatedAt: Date.now(),
+          }))
+        },
+        onFinish: (generationStats) => {
+          patchTemporaryMessage(assistantMessageId, (message) => ({
+            ...message,
+            streamStatus: 'done',
+            generationStats,
+            updatedAt: Date.now(),
+          }))
+        },
+        onError: (errorMessage) => {
+          patchTemporaryMessage(assistantMessageId, (message) => ({
+            ...message,
+            streamStatus: 'error',
+            errorMessage,
+            updatedAt: Date.now(),
+          }))
+        },
+      })
+
+      temporaryStreamRef.current = stream
+
+      try {
+        await stream.finished
+      } finally {
+        if (temporaryStreamRef.current === stream) {
+          temporaryStreamRef.current = null
+          removeStreamingThread(TEMPORARY_CHAT_THREAD_ID)
+        }
+      }
+    },
+    [
+      addStreamingThread,
+      appendCachedMessage,
+      patchTemporaryMessage,
+      removeStreamingThread,
+      temporaryStreamUrl,
+    ],
+  )
+
   const handleSendMessage = useCallback(
     async (
       content: string,
@@ -675,6 +900,44 @@ export default function ChatWorkspace({
         draftAttachments,
         uploadHandlers,
       )
+      const displayedUploadedAttachments = withDisplayedDraftAttachmentUrls(
+        uploadedAttachments,
+        draftAttachments,
+      )
+
+      if (temporary) {
+        const existingThreadMessages = temporaryChatState.messages
+        if (
+          streamingThreadIds.includes(TEMPORARY_CHAT_THREAD_ID) ||
+          existingThreadMessages.some(
+            (message) =>
+              message.streamStatus === 'pending' ||
+              message.streamStatus === 'streaming',
+          )
+        ) {
+          return
+        }
+
+        const createdAt = Date.now()
+        const userMessage: ChatMessage = {
+          id: createTemporaryMessageId(),
+          threadId: TEMPORARY_CHAT_THREAD_ID,
+          role: 'user',
+          content: trimmedContent,
+          attachments: displayedUploadedAttachments,
+          modelId: modelForMessage.id,
+          model: modelForMessage,
+          createdAt,
+          updatedAt: createdAt,
+        }
+
+        appendCachedMessage(TEMPORARY_CHAT_THREAD_ID, userMessage)
+        await startTemporaryAssistantReply({
+          model: modelForMessage,
+          conversationMessages: [...existingThreadMessages, userMessage],
+        })
+        return
+      }
 
       let threadId = activeThreadId
       let createdUserMessage: PersistedMessagePayload
@@ -730,7 +993,8 @@ export default function ChatWorkspace({
         threadId,
         role: 'user',
         content: trimmedContent,
-        attachments: createdUserMessage.attachments ?? uploadedAttachments,
+        attachments:
+          createdUserMessage.attachments ?? displayedUploadedAttachments,
         modelId: modelForMessage.id,
         model: modelForMessage,
         createdAt: createdUserMessage.createdAt,
@@ -763,7 +1027,10 @@ export default function ChatWorkspace({
       getThreadMessages,
       navigate,
       startAssistantReply,
+      startTemporaryAssistantReply,
       streamingThreadIds,
+      temporary,
+      temporaryChatState.messages,
       uploadAttachments,
     ],
   )
@@ -784,6 +1051,53 @@ export default function ChatWorkspace({
       const threadId = message.threadId
 
       if ((!trimmedContent && attachments.length === 0) || !threadId) {
+        return
+      }
+
+      if (isTemporaryThreadId(threadId)) {
+        let nextMessages: ChatMessage[] = []
+        const updatedAt = Date.now()
+
+        setTemporaryChatState((currentState) => {
+          const targetIndex = currentState.messages.findIndex(
+            (currentMessage) => currentMessage.id === message.id,
+          )
+          if (targetIndex === -1) {
+            nextMessages = currentState.messages
+            return currentState
+          }
+
+          nextMessages = currentState.messages
+            .slice(0, targetIndex + 1)
+            .map((currentMessage) =>
+              currentMessage.id === message.id
+                ? {
+                    ...currentMessage,
+                    content: trimmedContent,
+                    attachments,
+                    modelId: nextModel.id,
+                    model: nextModel,
+                    updatedAt,
+                  }
+                : currentMessage,
+            )
+
+          return {
+            thread: {
+              ...currentState.thread,
+              updatedAt,
+            },
+            messages: nextMessages,
+          }
+        })
+
+        setSelectedModel(nextModel)
+        if (nextMessages.length > 0) {
+          await startTemporaryAssistantReply({
+            model: nextModel,
+            conversationMessages: nextMessages,
+          })
+        }
         return
       }
 
@@ -865,7 +1179,13 @@ export default function ChatWorkspace({
         model: nextModel,
       })
     },
-    [activeThreadId, editMessage, mappedPersistedMessages, startAssistantReply],
+    [
+      activeThreadId,
+      editMessage,
+      mappedPersistedMessages,
+      startAssistantReply,
+      startTemporaryAssistantReply,
+    ],
   )
 
   const handleEditMessage = useCallback(
@@ -876,6 +1196,13 @@ export default function ChatWorkspace({
       attachments: ComposerAttachment[],
     ) => {
       const uploadedAttachments = await uploadAttachments(
+        attachments.filter(
+          (attachment): attachment is DraftAttachment =>
+            attachment.source === 'draft',
+        ),
+      )
+      const displayedUploadedAttachments = withDisplayedDraftAttachmentUrls(
+        uploadedAttachments,
         attachments.filter(
           (attachment): attachment is DraftAttachment =>
             attachment.source === 'draft',
@@ -896,7 +1223,7 @@ export default function ChatWorkspace({
         message,
         content,
         nextModel,
-        attachments: [...persistedAttachments, ...uploadedAttachments],
+        attachments: [...persistedAttachments, ...displayedUploadedAttachments],
       })
     },
     [restartFromUserMessage, uploadAttachments],
@@ -942,6 +1269,14 @@ export default function ChatWorkspace({
       return
     }
 
+    if (isTemporaryThreadId(activeThreadId)) {
+      const currentTemporaryStream = temporaryStreamRef.current
+      temporaryStreamRef.current = null
+      currentTemporaryStream?.abort()
+      removeStreamingThread(TEMPORARY_CHAT_THREAD_ID)
+      return
+    }
+
     const pendingAssistantMessage = [...activeMessages]
       .reverse()
       .find(
@@ -961,7 +1296,7 @@ export default function ChatWorkspace({
       streamId: pendingAssistantMessage.streamId,
     })
     abortPersistentTextStream(pendingAssistantMessage.streamId as StreamId)
-  }, [abortAssistantReply, activeMessages, activeThreadId])
+  }, [abortAssistantReply, activeMessages, activeThreadId, removeStreamingThread])
 
   const activeThreadIsStreaming = Boolean(
     activeThreadId &&
@@ -1006,8 +1341,14 @@ export default function ChatWorkspace({
       <AppSidebar
         threads={allThreads}
         activeThreadId={activeThreadId}
+        temporaryThread={temporaryChatState.thread}
+        isTemporaryActive={temporary}
+        isTemporaryStreaming={streamingThreadIds.includes(
+          TEMPORARY_CHAT_THREAD_ID,
+        )}
         streamingThreadIds={streamingThreadIds}
         onSelectThread={handleSelectThread}
+        onSelectTemporaryChat={handleSelectTemporaryChat}
         onPrefetchThread={handlePrefetchThread}
         onNewChat={handleNewChat}
         onLoadMoreThreads={handleLoadMoreThreads}
@@ -1029,8 +1370,10 @@ export default function ChatWorkspace({
           onEditMessage={handleEditMessage}
           onRetryMessage={handleRetryMessage}
           onAbortStreaming={handleAbortStreaming}
+          onStartTemporaryChat={handleStartTemporaryChat}
           isStreaming={activeThreadIsStreaming}
           isThreadPending={isThreadPending}
+          isTemporaryChat={temporary}
         />
       </SidebarInset>
     </SidebarProvider>

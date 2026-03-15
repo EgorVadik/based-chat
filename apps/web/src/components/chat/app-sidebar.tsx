@@ -35,6 +35,7 @@ import {
   MessageSquare,
   Trash2,
   LoaderCircle,
+  Clock3,
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from '@tanstack/react-router'
@@ -42,6 +43,7 @@ import { toast } from 'sonner'
 
 import { authClient } from '@/lib/auth-client'
 import { getThreadsByTimeGroup, type ThreadSummary } from '@/lib/threads'
+import type { TemporaryChatThread } from '@/lib/temporary-chat'
 
 function BrandMark() {
   return (
@@ -66,8 +68,12 @@ function BrandMark() {
 function AppSidebar({
   threads,
   activeThreadId,
+  temporaryThread,
+  isTemporaryActive,
+  isTemporaryStreaming,
   streamingThreadIds,
   onSelectThread,
+  onSelectTemporaryChat,
   onPrefetchThread,
   onNewChat,
   onLoadMoreThreads,
@@ -76,8 +82,12 @@ function AppSidebar({
 }: {
   threads: ThreadSummary[]
   activeThreadId: ThreadSummary['_id'] | null
+  temporaryThread: TemporaryChatThread
+  isTemporaryActive: boolean
+  isTemporaryStreaming: boolean
   streamingThreadIds: ThreadSummary['_id'][]
   onSelectThread: (id: ThreadSummary['_id']) => void
+  onSelectTemporaryChat: () => void
   onPrefetchThread: (id: ThreadSummary['_id']) => void
   onNewChat: () => void
   onLoadMoreThreads: () => void
@@ -162,6 +172,39 @@ function AppSidebar({
       <SidebarSeparator />
 
       <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel className='px-3 text-[10px] font-mono font-normal uppercase tracking-widest text-sidebar-foreground/40'>
+            Temporary
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={isTemporaryActive}
+                  onClick={onSelectTemporaryChat}
+                  className='group/conv cursor-pointer'
+                >
+                  <Clock3
+                    className={cn(
+                      'size-3.5 shrink-0',
+                      isTemporaryActive
+                        ? 'text-primary'
+                        : 'text-muted-foreground/70',
+                    )}
+                  />
+                  <span className='truncate'>{temporaryThread.title}</span>
+                  {isTemporaryStreaming ? (
+                    <LoaderCircle className='ml-auto size-3 animate-spin text-primary' />
+                  ) : (
+                    <span className='ml-auto text-[10px] font-mono uppercase tracking-widest text-sidebar-foreground/35'>
+                      Local
+                    </span>
+                  )}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
         {groups.map((group) => (
           <SidebarGroup key={group.label}>
             <SidebarGroupLabel className='text-[10px] uppercase tracking-widest font-mono text-sidebar-foreground/40 font-normal px-3'>
@@ -331,6 +374,11 @@ function areSidebarPropsEqual(
 ) {
   return (
     previousProps.activeThreadId === nextProps.activeThreadId &&
+    previousProps.isTemporaryActive === nextProps.isTemporaryActive &&
+    previousProps.isTemporaryStreaming === nextProps.isTemporaryStreaming &&
+    previousProps.temporaryThread.updatedAt ===
+      nextProps.temporaryThread.updatedAt &&
+    previousProps.temporaryThread.title === nextProps.temporaryThread.title &&
     previousProps.threadPaginationStatus === nextProps.threadPaginationStatus &&
     previousProps.user.name === nextProps.user.name &&
     previousProps.user.email === nextProps.user.email &&

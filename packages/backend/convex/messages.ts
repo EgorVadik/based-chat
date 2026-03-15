@@ -67,6 +67,18 @@ type GenerationStats = {
   textTokens?: number
   reasoningTokens?: number
 }
+type TemporaryStreamAttachment = {
+  kind: 'image' | 'file'
+  storageId: string
+  fileName: string
+  contentType: string
+  size: number
+}
+type TemporaryStreamRequestMessage = {
+  role: 'user' | 'system'
+  content: string
+  attachments?: TemporaryStreamAttachment[]
+}
 type UserProfilePromptContext = {
   preferredName?: string
   role?: string
@@ -95,12 +107,17 @@ type StreamEvent =
       type: 'error'
       errorMessage: string
     }
+  | {
+      type: 'finish'
+      generationStats?: GenerationStats
+    }
 
 const internalMessages = internal.messages as unknown as {
   getAssistantReplyStopState: any
   applyGeneratedThreadTitle: any
   generateThreadTitle: any
   getStreamGenerationContext: any
+  getTemporaryStreamSystemPrompt: any
   getThreadTitleContext: any
   markAssistantReplyCompleted: any
   markAssistantReplyError: any
@@ -135,6 +152,34 @@ async function resolveModelAttachments(
     await Promise.all(
       attachments.map(async (attachment) => {
         const url = await ctx.storage.getUrl(attachment.storageId)
+        if (!url) {
+          return null
+        }
+
+        return {
+          kind: attachment.kind,
+          fileName: attachment.fileName,
+          contentType:
+            attachment.contentType || 'application/octet-stream',
+          url,
+        }
+      }),
+    )
+  ).filter((attachment): attachment is ResolvedModelAttachment => attachment != null)
+}
+
+async function resolveTemporaryModelAttachments(
+  ctx: ActionCtx,
+  attachments: TemporaryStreamAttachment[] | undefined,
+): Promise<ResolvedModelAttachment[]> {
+  if (!attachments?.length) {
+    return []
+  }
+
+  return (
+    await Promise.all(
+      attachments.map(async (attachment) => {
+        const url = await ctx.storage.getUrl(attachment.storageId as Id<'_storage'>)
         if (!url) {
           return null
         }
@@ -589,6 +634,15 @@ export const getStreamGenerationContext = internalQuery({
         })),
       ),
     }
+  },
+})
+
+export const getTemporaryStreamSystemPrompt = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireAuthenticatedUser(ctx)
+
+    return buildSystemPrompt(await getUserProfilePromptContext(ctx, user))
   },
 })
 
@@ -1542,6 +1596,263 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
     userId: user._id,
     chunkCount,
   })
+
+  return applyCorsHeaders(response, request)
+})
+
+function isTemporaryStreamAttachment(
+  attachment: unknown,
+): attachment is TemporaryStreamAttachment {
+  return (
+    attachment != null &&
+    typeof attachment === 'object' &&
+    ('kind' in attachment &&
+      (((attachment as { kind?: unknown }).kind === 'image') ||
+        (attachment as { kind?: unknown }).kind === 'file')) &&
+    typeof (attachment as { storageId?: unknown }).storageId === 'string' &&
+    typeof (attachment as { fileName?: unknown }).fileName === 'string' &&
+    typeof (attachment as { contentType?: unknown }).contentType === 'string' &&
+    typeof (attachment as { size?: unknown }).size === 'number'
+  )
+}
+
+function isTemporaryStreamMessage(
+  message: unknown,
+): message is TemporaryStreamRequestMessage {
+  return (
+    message != null &&
+    typeof message === 'object' &&
+    ('role' in message &&
+      (((message as { role?: unknown }).role === 'user') ||
+        (message as { role?: unknown }).role === 'system')) &&
+    typeof (message as { content?: unknown }).content === 'string' &&
+    (!('attachments' in message) ||
+      (Array.isArray((message as { attachments?: unknown }).attachments) &&
+        ((message as { attachments?: unknown[] }).attachments ?? []).every(
+          isTemporaryStreamAttachment,
+        )))
+  )
+}
+
+export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => {
+  const payload = (await request.json()) as {
+    modelId?: string
+    messages?: unknown
+  }
+
+  if (
+    typeof payload.modelId !== 'string' ||
+    payload.modelId.trim().length === 0 ||
+    !Array.isArray(payload.messages) ||
+    !payload.messages.every(isTemporaryStreamMessage)
+  ) {
+    return applyCorsHeaders(
+      new Response('Invalid temporary chat payload', {
+        status: 400,
+      }),
+      request,
+    )
+  }
+
+  const user = await authComponent.safeGetAuthUser(ctx)
+  if (!user) {
+    return applyCorsHeaders(
+      new Response('Not authenticated', {
+        status: 401,
+      }),
+      request,
+    )
+  }
+
+  const systemPrompt = await ctx.runQuery(
+    internalMessages.getTemporaryStreamSystemPrompt,
+    {},
+  )
+  const conversationMessages = toModelMessages(
+    await Promise.all(
+      payload.messages.map(async (message) => ({
+        role: message.role,
+        content: message.content,
+        attachments:
+          message.role === 'user'
+            ? await resolveTemporaryModelAttachments(ctx, message.attachments)
+            : [],
+      })),
+    ),
+  )
+  const modelId = getOpenRouterModelId(payload.modelId)
+
+  let response: Response
+  try {
+    const { readable, writable } = new TransformStream()
+    const writer = writable.getWriter()
+    const textEncoder = new TextEncoder()
+    let writerClosed = false
+    let writerDisconnected = false
+
+    const closeWriter = async () => {
+      if (writerClosed || writerDisconnected) {
+        return
+      }
+
+      writerClosed = true
+      try {
+        await writer.close()
+      } catch {
+        writerDisconnected = true
+      }
+    }
+
+    const writeEvent = async (event: StreamEvent) => {
+      if (writerClosed || writerDisconnected) {
+        return
+      }
+
+      try {
+        await writer.write(textEncoder.encode(encodeStreamEvent(event)))
+      } catch {
+        writerDisconnected = true
+      }
+    }
+
+    const doStream = async () => {
+      let streamFailureMessage: string | undefined
+      let rawStreamFailureMessage: string | undefined
+      const generationStartedAt = Date.now()
+      const generationAbortController = new AbortController()
+      let firstTextDeltaAt: number | undefined
+      let reasoningText = ''
+      let costUsd: number | undefined
+      let totalUsage:
+        | {
+            inputTokens?: number
+            outputTokens?: number
+            totalTokens?: number
+            outputTokenDetails?: {
+              textTokens?: number
+              reasoningTokens?: number
+            }
+          }
+        | undefined
+
+      request.signal.addEventListener(
+        'abort',
+        () => {
+          generationAbortController.abort()
+        },
+        { once: true },
+      )
+
+      try {
+        const result = streamText({
+          model: openrouter(modelId),
+          system: systemPrompt,
+          messages: conversationMessages,
+          abortSignal: generationAbortController.signal,
+          onError({ error }) {
+            rawStreamFailureMessage = extractRawStreamErrorMessage(error)
+            streamFailureMessage = formatStreamErrorMessage(error)
+          },
+        })
+
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case 'reasoning-delta': {
+              reasoningText += part.text
+              await writeEvent({
+                type: 'reasoning-delta',
+                text: part.text,
+              })
+              break
+            }
+            case 'text-delta': {
+              firstTextDeltaAt ??= Date.now()
+              await writeEvent({
+                type: 'text-delta',
+                text: part.text,
+              })
+              break
+            }
+            case 'error': {
+              throw part.error
+            }
+            case 'abort': {
+              throw new Error('The reply was aborted before completion.')
+            }
+            case 'tool-error': {
+              throw part.error
+            }
+            case 'finish': {
+              totalUsage = part.totalUsage
+              break
+            }
+            case 'finish-step': {
+              costUsd = extractOpenRouterCostUsd(part.providerMetadata)
+              break
+            }
+            default: {
+              break
+            }
+          }
+        }
+
+        if (streamFailureMessage) {
+          throw new Error(streamFailureMessage)
+        }
+
+        await writeEvent({
+          type: 'finish',
+          generationStats: buildGenerationStats({
+            startedAt: generationStartedAt,
+            firstTextDeltaAt,
+            completedAt: Date.now(),
+            costUsd,
+            totalUsage,
+          }),
+        })
+        await closeWriter()
+      } catch (error) {
+        const errorMessage =
+          streamFailureMessage ?? formatStreamErrorMessage(error)
+        const rawErrorMessage =
+          rawStreamFailureMessage ?? extractRawStreamErrorMessage(error)
+
+        await writeEvent({
+          type: 'error',
+          errorMessage,
+        })
+        await closeWriter()
+        throw error instanceof Error ? error : new Error(rawErrorMessage)
+      }
+    }
+
+    void doStream().catch((error) => {
+      console.error('[temp-stream:http] stream-task-failed', {
+        userId: user._id,
+        modelId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+
+    response = new Response(readable, {
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+      },
+    })
+  } catch (error) {
+    console.error('[temp-stream:http] generation-error', {
+      userId: user._id,
+      modelId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return applyCorsHeaders(
+      new Response('Temporary reply failed to stream', {
+        status: 500,
+      }),
+      request,
+    )
+  }
 
   return applyCorsHeaders(response, request)
 })

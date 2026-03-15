@@ -4,6 +4,7 @@ import { authComponent, createAuth } from "./auth";
 import {
   streamAssistantReply,
   streamAssistantReplyOptions,
+  streamTemporaryAssistantReply,
 } from "./messages";
 
 const http = httpRouter();
@@ -16,6 +17,16 @@ http.route({
 });
 http.route({
   path: "/messages/stream",
+  method: "OPTIONS",
+  handler: streamAssistantReplyOptions,
+});
+http.route({
+  path: "/messages/temp-stream",
+  method: "POST",
+  handler: streamTemporaryAssistantReply,
+});
+http.route({
+  path: "/messages/temp-stream",
   method: "OPTIONS",
   handler: streamAssistantReplyOptions,
 });

@@ -1,10 +1,30 @@
 import { Button } from "@based-chat/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@based-chat/ui/components/dropdown-menu";
 import { Skeleton } from "@based-chat/ui/components/skeleton";
 import { SidebarTrigger } from "@based-chat/ui/components/sidebar";
 import { Separator } from "@based-chat/ui/components/separator";
-import { ArrowDown, Sparkles } from "lucide-react";
+import {
+  ArrowDown,
+  Clock3,
+  Monitor,
+  Moon,
+  Settings2,
+  Sparkles,
+  Sun,
+} from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useTheme } from "@/components/theme-provider";
 import {
   createComposerAttachmentFromMessageAttachment,
   revokeComposerAttachmentPreview,
@@ -21,21 +41,40 @@ import type { ThreadSummary } from "@/lib/threads";
 import ChatInput from "./chat-input";
 import MessageBubble from "./message-bubble";
 
-function EmptyState({ model }: { model: Model }) {
+function EmptyState({
+  model,
+  isTemporaryChat,
+}: {
+  model: Model;
+  isTemporaryChat: boolean;
+}) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4">
       <div className="flex max-w-md flex-col items-center gap-4 text-center">
         <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10">
-          <Sparkles className="size-6 text-primary" />
+          {isTemporaryChat ? (
+            <Clock3 className="size-6 text-primary" />
+          ) : (
+            <Sparkles className="size-6 text-primary" />
+          )}
         </div>
         <div>
           <h2 className="text-lg font-semibold tracking-tight">
-            Start a conversation
+            {isTemporaryChat ? "Temporary chat" : "Start a conversation"}
           </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-            Ask anything. Write code. Analyze data. Get creative.
-            <br />
-            <span className="font-medium text-primary/80">{model.name}</span> is ready.
+            {isTemporaryChat ? (
+              <>
+                Messages stay in this browser session and will not be saved to your
+                account history.
+              </>
+            ) : (
+              <>
+                Ask anything. Write code. Analyze data. Get creative.
+                <br />
+                <span className="font-medium text-primary/80">{model.name}</span> is ready.
+              </>
+            )}
           </p>
         </div>
         <div className="mt-2 grid w-full grid-cols-2 gap-2">
@@ -78,6 +117,62 @@ function ThreadPendingState() {
   );
 }
 
+function SettingsDropdown() {
+  const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
+  const selectedTheme = theme ?? "system";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground hover:text-foreground"
+          />
+        }
+      >
+        <Settings2 className="size-4" />
+        <span className="sr-only">Open chat settings</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={10} className="w-52">
+        <DropdownMenuLabel>Theme</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={selectedTheme}
+          onValueChange={(value) => setTheme(value as "light" | "dark" | "system")}
+        >
+          <DropdownMenuRadioItem value="light">
+            <Sun className="size-3.5" />
+            <span>Light</span>
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="dark">
+            <Moon className="size-3.5" />
+            <span>Dark</span>
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="system">
+            <Monitor className="size-3.5" />
+            <span>System</span>
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() =>
+            void navigate({
+              to: "/settings",
+              search: { tab: "profile" },
+            })
+          }
+        >
+          <Settings2 className="size-3.5" />
+          <span>Open settings</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export default function ChatArea({
   thread,
   messages,
@@ -90,8 +185,10 @@ export default function ChatArea({
   onEditMessage,
   onRetryMessage,
   onAbortStreaming,
+  onStartTemporaryChat,
   isStreaming,
   isThreadPending = false,
+  isTemporaryChat = false,
 }: {
   thread: ThreadSummary | null;
   messages: ChatMessage[];
@@ -117,8 +214,10 @@ export default function ChatArea({
   ) => void | Promise<void>;
   onRetryMessage: (message: ChatMessage) => void | Promise<void>;
   onAbortStreaming: () => void;
+  onStartTemporaryChat: () => void;
   isStreaming: boolean;
   isThreadPending?: boolean;
+  isTemporaryChat?: boolean;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -228,9 +327,29 @@ export default function ChatArea({
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2">
         <SidebarTrigger />
         <Separator orientation="vertical" className="h-4" />
-        <span className="truncate text-xs font-medium text-muted-foreground">
-          {thread?.title || (isThreadPending ? "Opening chat" : "New chat")}
-        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-xs font-medium text-muted-foreground">
+              {thread?.title || (isThreadPending ? "Opening chat" : "New chat")}
+            </span>
+            {isTemporaryChat ? (
+              <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-[0.18em] text-primary">
+                Temporary
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant={isTemporaryChat ? "secondary" : "ghost"}
+          size="icon-sm"
+          onClick={onStartTemporaryChat}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Clock3 className="size-4" />
+          <span className="sr-only">Start temporary chat</span>
+        </Button>
+        <SettingsDropdown />
       </div>
 
       {hasMessages ? (
@@ -317,7 +436,7 @@ export default function ChatArea({
       ) : isThreadPending ? (
         <ThreadPendingState />
       ) : (
-        <EmptyState model={model} />
+        <EmptyState model={model} isTemporaryChat={isTemporaryChat} />
       )}
 
       <ChatInput
