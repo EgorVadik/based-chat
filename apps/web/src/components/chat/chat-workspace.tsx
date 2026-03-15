@@ -15,6 +15,7 @@ import {
   useQuery,
 } from 'convex/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 
 import type {
   AttachmentUploadHandlers,
@@ -87,6 +88,89 @@ const chatWorkspaceSnapshot: {
   user: undefined,
   threads: [],
   messageCache: {},
+}
+
+function formatMarkdownTimestamp(timestamp: number) {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(timestamp)
+}
+
+function sanitizeMarkdownFilename(title: string) {
+  const normalized = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return normalized.length > 0 ? normalized : 'chat-export'
+}
+
+function buildThreadMarkdown(thread: ThreadSummary, messages: ChatMessage[]) {
+  const sections = [
+    `# ${thread.title}`,
+    `Created: ${formatMarkdownTimestamp(thread.createdAt)}`,
+    `Last Updated: ${formatMarkdownTimestamp(thread.updatedAt)}`,
+    '---',
+  ]
+
+  for (const message of messages) {
+    const label =
+      message.role === 'user'
+        ? 'User'
+        : `Assistant${message.modelId ? ` (${message.modelId})` : ''}`
+    const reasoning = message.reasoningText?.trim()
+    const content = message.content.trim()
+
+    sections.push(`### ${label}`)
+
+    if (reasoning) {
+      sections.push(
+        '<details>',
+        '<summary>Reasoning</summary>',
+        '',
+        reasoning,
+        '</details>',
+      )
+    }
+
+    if (content) {
+      sections.push(content)
+    }
+
+    if (!content && message.attachments.length > 0) {
+      sections.push(
+        'Attachments:',
+        ...message.attachments.map((attachment) => `- ${attachment.fileName}`),
+      )
+    }
+
+    if (!content && message.attachments.length === 0) {
+      sections.push('*No text content.*')
+    }
+
+    sections.push('---')
+  }
+
+  return `${sections.join('\n\n')}\n`
+}
+
+function downloadMarkdownFile(fileName: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  window.URL.revokeObjectURL(url)
 }
 
 function mergeThreads(
@@ -216,6 +300,8 @@ export default function ChatWorkspace({
     (api.messages as { createThreadWithFirstMessage: any })
       .createThreadWithFirstMessage,
   )
+  const renameThread = useMutation(api.threads.rename)
+  const deleteManyThreads = useMutation(api.threads.deleteMany)
   const editMessage = useMutation((api.messages as { edit: any }).edit)
   const createAssistantReply = useMutation(
     (api.messages as { createAssistantReply: any }).createAssistantReply,
@@ -620,6 +706,86 @@ export default function ChatWorkspace({
       })
     },
     [navigate],
+  )
+
+  const handleOpenThreadInNewTab = useCallback(
+    (threadId: ThreadSummary['_id']) => {
+      window.open(
+        `/chat/${encodeURIComponent(threadId)}`,
+        '_blank',
+        'noopener,noreferrer',
+      )
+    },
+    [],
+  )
+
+  const handleRenameThread = useCallback(
+    async (threadId: ThreadSummary['_id'], title: string) => {
+      await renameThread({
+        threadId,
+        title,
+      })
+      toast.success('Thread renamed.')
+    },
+    [renameThread],
+  )
+
+  const handleDeleteThread = useCallback(
+    async (threadId: ThreadSummary['_id']) => {
+      const { deletedCount } = (await deleteManyThreads({
+        threadIds: [threadId],
+      })) as { deletedCount: number }
+
+      setMessageCache((currentCache) => {
+        if (!(threadId in currentCache)) {
+          return currentCache
+        }
+
+        const nextCache = { ...currentCache }
+        delete nextCache[threadId]
+        return nextCache
+      })
+      setStreamingThreadIds((currentThreadIds) =>
+        currentThreadIds.filter((currentThreadId) => currentThreadId !== threadId),
+      )
+
+      if (activeThreadId === threadId || routeThreadId === threadId) {
+        setDrivenStreamMessageIds([])
+        void navigate({ to: '/' })
+      }
+
+      toast.success(
+        `Deleted ${deletedCount} thread${deletedCount === 1 ? '' : 's'}.`,
+      )
+    },
+    [activeThreadId, deleteManyThreads, navigate, routeThreadId],
+  )
+
+  const handleExportThreadAsMarkdown = useCallback(
+    async (threadId: ThreadSummary['_id']) => {
+      const thread = allThreads.find((currentThread) => currentThread._id === threadId)
+      if (!thread) {
+        throw new Error('Thread not found.')
+      }
+
+      const cachedMessages = getThreadMessages(threadId)
+      const resolvedMessages =
+        cachedMessages.length > 0
+          ? cachedMessages
+          : (
+              ((await convex.query(api.messages.listByThread, {
+                threadId,
+              })) as PersistedMessagePayload[]).map(toChatMessage)
+            )
+      const markdown = buildThreadMarkdown(thread, resolvedMessages)
+
+      downloadMarkdownFile(
+        `${sanitizeMarkdownFilename(thread.title)}.md`,
+        markdown,
+      )
+      toast.success('Markdown export ready.')
+    },
+    [allThreads, convex, getThreadMessages],
   )
 
   const handleModelChange = useCallback((model: Model) => {
@@ -1350,6 +1516,10 @@ export default function ChatWorkspace({
         onSelectThread={handleSelectThread}
         onSelectTemporaryChat={handleSelectTemporaryChat}
         onPrefetchThread={handlePrefetchThread}
+        onOpenThreadInNewTab={handleOpenThreadInNewTab}
+        onRenameThread={handleRenameThread}
+        onDeleteThread={handleDeleteThread}
+        onExportThreadAsMarkdown={handleExportThreadAsMarkdown}
         onNewChat={handleNewChat}
         onLoadMoreThreads={handleLoadMoreThreads}
         threadPaginationStatus={threadPaginationStatus}

@@ -2,6 +2,7 @@ import { Button } from "@based-chat/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -138,24 +139,28 @@ function SettingsDropdown() {
         <span className="sr-only">Open chat settings</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={10} className="w-52">
-        <DropdownMenuLabel>Theme</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={selectedTheme}
-          onValueChange={(value) => setTheme(value as "light" | "dark" | "system")}
-        >
-          <DropdownMenuRadioItem value="light">
-            <Sun className="size-3.5" />
-            <span>Light</span>
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">
-            <Moon className="size-3.5" />
-            <span>Dark</span>
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">
-            <Monitor className="size-3.5" />
-            <span>System</span>
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Theme</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={selectedTheme}
+            onValueChange={(value) =>
+              setTheme(value as "light" | "dark" | "system")
+            }
+          >
+            <DropdownMenuRadioItem value="light">
+              <Sun className="size-3.5" />
+              <span>Light</span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="dark">
+              <Moon className="size-3.5" />
+              <span>Dark</span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="system">
+              <Monitor className="size-3.5" />
+              <span>System</span>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() =>

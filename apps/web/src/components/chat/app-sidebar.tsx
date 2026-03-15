@@ -6,6 +6,7 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarMenuAction,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -36,8 +37,12 @@ import {
   Trash2,
   LoaderCircle,
   Clock3,
+  Ellipsis,
+  ExternalLink,
+  PencilLine,
+  FileText,
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
@@ -75,6 +80,10 @@ function AppSidebar({
   onSelectThread,
   onSelectTemporaryChat,
   onPrefetchThread,
+  onOpenThreadInNewTab,
+  onRenameThread,
+  onDeleteThread,
+  onExportThreadAsMarkdown,
   onNewChat,
   onLoadMoreThreads,
   threadPaginationStatus,
@@ -89,6 +98,13 @@ function AppSidebar({
   onSelectThread: (id: ThreadSummary['_id']) => void
   onSelectTemporaryChat: () => void
   onPrefetchThread: (id: ThreadSummary['_id']) => void
+  onOpenThreadInNewTab: (id: ThreadSummary['_id']) => void
+  onRenameThread: (
+    id: ThreadSummary['_id'],
+    title: string,
+  ) => Promise<void>
+  onDeleteThread: (id: ThreadSummary['_id']) => Promise<void>
+  onExportThreadAsMarkdown: (id: ThreadSummary['_id']) => Promise<void>
   onNewChat: () => void
   onLoadMoreThreads: () => void
   threadPaginationStatus:
@@ -105,10 +121,18 @@ function AppSidebar({
   const router = useRouter()
   const groups = getThreadsByTimeGroup(threads)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
   const streamingThreadIdSet = useMemo(
     () => new Set(streamingThreadIds),
     [streamingThreadIds],
   )
+  const [renamingThreadId, setRenamingThreadId] = useState<
+    ThreadSummary['_id'] | null
+  >(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [pendingThreadActionId, setPendingThreadActionId] = useState<
+    ThreadSummary['_id'] | null
+  >(null)
   const displayName =
     user.name?.trim() || user.email?.split('@')[0] || 'Signed in'
   const displayEmail = user.email || 'No email available'
@@ -145,6 +169,80 @@ function AppSidebar({
 
     return () => observer.disconnect()
   }, [onLoadMoreThreads, threadPaginationStatus])
+
+  useEffect(() => {
+    if (!renamingThreadId) {
+      return
+    }
+
+    renameInputRef.current?.focus()
+    renameInputRef.current?.select()
+  }, [renamingThreadId])
+
+  useEffect(() => {
+    if (renamingThreadId && !threads.some((thread) => thread._id === renamingThreadId)) {
+      setRenamingThreadId(null)
+      setRenameValue('')
+    }
+  }, [renamingThreadId, threads])
+
+  const beginRenamingThread = (thread: ThreadSummary) => {
+    setRenamingThreadId(thread._id)
+    setRenameValue(thread.title)
+  }
+
+  const cancelRenamingThread = () => {
+    setRenamingThreadId(null)
+    setRenameValue('')
+  }
+
+  const submitThreadRename = async (thread: ThreadSummary) => {
+    if (pendingThreadActionId === thread._id) {
+      return
+    }
+
+    const normalizedTitle = renameValue.trim()
+
+    if (normalizedTitle.length === 0) {
+      cancelRenamingThread()
+      return
+    }
+
+    if (normalizedTitle === thread.title) {
+      cancelRenamingThread()
+      return
+    }
+
+    setPendingThreadActionId(thread._id)
+
+    try {
+      await onRenameThread(thread._id, normalizedTitle)
+      cancelRenamingThread()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to rename thread.')
+    } finally {
+      setPendingThreadActionId((currentThreadId) =>
+        currentThreadId === thread._id ? null : currentThreadId,
+      )
+    }
+  }
+
+  const handleThreadAction = async (
+    threadId: ThreadSummary['_id'],
+    action: () => Promise<void>,
+  ) => {
+    setPendingThreadActionId(threadId)
+
+    try {
+      await action()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Thread action failed.')
+    } finally {
+      setPendingThreadActionId((currentThreadId) =>
+        currentThreadId === threadId ? null : currentThreadId,
+      )
+    }
+  }
 
   return (
     <Sidebar>
@@ -216,38 +314,133 @@ function AppSidebar({
                   const isStreamingThread =
                     thread.isStreaming ||
                     streamingThreadIdSet.has(thread._id)
+                  const isRenamingThread = renamingThreadId === thread._id
+                  const isThreadActionPending =
+                    pendingThreadActionId === thread._id
 
                   return (
                     <SidebarMenuItem key={thread._id}>
-                      <SidebarMenuButton
-                        isActive={thread._id === activeThreadId}
-                        onClick={() => onSelectThread(thread._id)}
-                        onMouseEnter={() => onPrefetchThread(thread._id)}
-                        onFocus={() => onPrefetchThread(thread._id)}
-                        className='group/conv cursor-pointer'
-                      >
-                        <div
-                          className={cn(
-                            'size-1.5 shrink-0 rounded-full',
-                            isStreamingThread
-                              ? 'bg-primary/70'
-                              : 'bg-muted-foreground/50',
-                          )}
-                        />
-                        <span className='truncate'>{thread.title}</span>
-                        {isStreamingThread ? (
-                          <LoaderCircle className='ml-auto size-3 animate-spin text-primary' />
-                        ) : (
-                          <button
-                            className='ml-auto opacity-0 group-hover/conv:opacity-100 transition-opacity text-muted-foreground hover:text-destructive'
-                            onClick={(e) => {
-                              e.stopPropagation()
+                      {isRenamingThread ? (
+                        <form
+                          className='flex items-center gap-2 rounded-md bg-sidebar-accent/80 px-2 py-1.5 shadow-sm ring-1 ring-sidebar-border/70'
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            void submitThreadRename(thread)
+                          }}
+                        >
+                          <div
+                            className={cn(
+                              'size-1.5 shrink-0 rounded-full',
+                              isStreamingThread
+                                ? 'bg-primary/70'
+                                : 'bg-muted-foreground/50',
+                            )}
+                          />
+                          <Input
+                            ref={renameInputRef}
+                            value={renameValue}
+                            onChange={(event) => setRenameValue(event.target.value)}
+                            onBlur={() => {
+                              void submitThreadRename(thread)
                             }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                cancelRenamingThread()
+                              }
+                            }}
+                            disabled={isThreadActionPending}
+                            className='h-7 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0'
+                          />
+                          {isThreadActionPending ? (
+                            <LoaderCircle className='size-3 animate-spin text-primary' />
+                          ) : null}
+                        </form>
+                      ) : (
+                        <DropdownMenu>
+                          <SidebarMenuButton
+                            isActive={thread._id === activeThreadId}
+                            onClick={() => onSelectThread(thread._id)}
+                            onMouseEnter={() => onPrefetchThread(thread._id)}
+                            onFocus={() => onPrefetchThread(thread._id)}
+                            className='group/conv cursor-pointer'
                           >
-                            <Trash2 className='size-3' />
-                          </button>
-                        )}
-                      </SidebarMenuButton>
+                            <div
+                              className={cn(
+                                'size-1.5 shrink-0 rounded-full',
+                                isStreamingThread
+                                  ? 'bg-primary/70'
+                                  : 'bg-muted-foreground/50',
+                              )}
+                            />
+                            <span className='truncate'>{thread.title}</span>
+                            {isStreamingThread ? (
+                              <LoaderCircle className='ml-auto mr-6 size-3 animate-spin text-primary' />
+                            ) : null}
+                          </SidebarMenuButton>
+                          <>
+                            <DropdownMenuTrigger
+                              render={
+                                <SidebarMenuAction
+                                  showOnHover
+                                  className='text-muted-foreground/70 hover:text-foreground'
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                  }}
+                                >
+                                  <Ellipsis className='size-3.5' />
+                                  <span className='sr-only'>Thread actions</span>
+                                </SidebarMenuAction>
+                              }
+                            />
+                            <DropdownMenuContent
+                              align='end'
+                              side='bottom'
+                              sideOffset={8}
+                              className='w-44'
+                            >
+                              <DropdownMenuItem
+                                disabled={isThreadActionPending}
+                                onClick={() => onOpenThreadInNewTab(thread._id)}
+                              >
+                                <ExternalLink className='size-3.5' />
+                                <span>Open in new tab</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={isThreadActionPending}
+                                onClick={() => beginRenamingThread(thread)}
+                              >
+                                <PencilLine className='size-3.5' />
+                                <span>Rename</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                disabled={isThreadActionPending}
+                                onClick={() =>
+                                  void handleThreadAction(thread._id, () =>
+                                    onExportThreadAsMarkdown(thread._id),
+                                  )
+                                }
+                              >
+                                <FileText className='size-3.5' />
+                                <span>Export as markdown</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                variant='destructive'
+                                disabled={isThreadActionPending}
+                                onClick={() =>
+                                  void handleThreadAction(thread._id, () =>
+                                    onDeleteThread(thread._id),
+                                  )
+                                }
+                              >
+                                <Trash2 className='size-3.5' />
+                                <span>Delete</span>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </>
+                        </DropdownMenu>
+                      )}
                     </SidebarMenuItem>
                   )
                 })}

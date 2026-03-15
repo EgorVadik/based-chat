@@ -148,6 +148,37 @@ export const create = mutation({
   },
 });
 
+export const rename = mutation({
+  args: {
+    threadId: v.id("threads"),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx);
+    const thread = await requireOwnedThread(ctx, args.threadId, user._id);
+    const title = normalizeTitle(args.title);
+
+    if (thread.title === title) {
+      return {
+        ...thread,
+        title,
+      };
+    }
+
+    const updatedAt = Date.now();
+    await ctx.db.patch(args.threadId, {
+      title,
+      updatedAt,
+    });
+
+    return {
+      ...thread,
+      title,
+      updatedAt,
+    };
+  },
+});
+
 export const deleteMany = mutation({
   args: {
     threadIds: v.array(v.id("threads")),
