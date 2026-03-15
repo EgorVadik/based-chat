@@ -1,12 +1,16 @@
-type StoredAttachment = {
+import type { ModelMessage, UserModelMessage } from "ai";
+
+type ResolvedAttachment = {
+  kind: "image" | "file";
   fileName: string;
   contentType: string;
+  dataUrl: string;
 };
 
 type ConversationMessage = {
   role: "user" | "system";
   content: string;
-  attachments?: StoredAttachment[];
+  attachments?: ResolvedAttachment[];
 };
 
 const OPENROUTER_MODEL_IDS: Record<string, string> = {
@@ -24,35 +28,73 @@ const OPENROUTER_MODEL_IDS: Record<string, string> = {
   "deepseek-v3": "deepseek/deepseek-chat",
 };
 
-function summarizeAttachments(attachments: StoredAttachment[] | undefined) {
-  if (!attachments || attachments.length === 0) {
-    return "";
-  }
-
-  const fileList = attachments
-    .map((attachment) => `${attachment.fileName} (${attachment.contentType})`)
-    .join(", ");
-
-  return `Attached files: ${fileList}`;
-}
-
 export function getOpenRouterModelId(modelId: string) {
   return OPENROUTER_MODEL_IDS[modelId] ?? modelId;
 }
 
-export function toModelMessages(
-  messages: ConversationMessage[],
-): { role: "user" | "assistant"; content: string }[] {
-  return messages.flatMap((message) => {
-    const attachmentSummary = summarizeAttachments(message.attachments);
-    const parts = [message.content.trim(), attachmentSummary].filter(Boolean);
+function toUserContentParts(message: ConversationMessage) {
+  const contentParts: Exclude<UserModelMessage["content"], string> = [];
+  const trimmedContent = message.content.trim();
 
-    if (parts.length === 0) {
-      return [];
+  if (trimmedContent) {
+    contentParts.push({
+      type: "text",
+      text: trimmedContent,
+    });
+  }
+
+  for (const attachment of message.attachments ?? []) {
+    if (
+      attachment.kind === "image" ||
+      attachment.contentType.startsWith("image/")
+    ) {
+      contentParts.push({
+        type: "image",
+        image: attachment.dataUrl,
+        mediaType: attachment.contentType,
+      });
+      continue;
     }
 
-    const role: "user" | "assistant" =
-      message.role === "user" ? "user" : "assistant";
-    return [{ role, content: parts.join("\n\n") }];
-  });
+    contentParts.push({
+      type: "file",
+      data: attachment.dataUrl,
+      filename: attachment.fileName,
+      mediaType: attachment.contentType,
+    });
+  }
+
+  return contentParts;
+}
+
+export function toModelMessages(messages: ConversationMessage[]): ModelMessage[] {
+  const modelMessages: ModelMessage[] = [];
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      const contentParts = toUserContentParts(message);
+
+      if (contentParts.length === 0) {
+        continue;
+      }
+
+      modelMessages.push({
+        role: "user",
+        content: contentParts,
+      });
+      continue;
+    }
+
+    const trimmedContent = message.content.trim();
+    if (!trimmedContent) {
+      continue;
+    }
+
+    modelMessages.push({
+      role: "assistant",
+      content: trimmedContent,
+    });
+  }
+
+  return modelMessages;
 }

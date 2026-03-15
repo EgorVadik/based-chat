@@ -1,6 +1,17 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const generationStatsValidator = v.object({
+  timeToFirstTokenMs: v.optional(v.number()),
+  tokensPerSecond: v.optional(v.number()),
+  costUsd: v.optional(v.number()),
+  inputTokens: v.optional(v.number()),
+  outputTokens: v.optional(v.number()),
+  totalTokens: v.optional(v.number()),
+  textTokens: v.optional(v.number()),
+  reasoningTokens: v.optional(v.number()),
+});
+
 export default defineSchema({
   userMetadata: defineTable({
     userId: v.string(),
@@ -32,7 +43,9 @@ export default defineSchema({
     role: v.union(v.literal("user"), v.literal("system")),
     modelId: v.string(),
     content: v.string(),
+    reasoningText: v.optional(v.string()),
     streamId: v.optional(v.string()),
+    stopRequestedAt: v.optional(v.number()),
     errorMessage: v.optional(v.string()),
     attachments: v.optional(
       v.array(
@@ -45,6 +58,7 @@ export default defineSchema({
         }),
       ),
     ),
+    generationStats: v.optional(generationStatsValidator),
     createdAt: v.number(),
     updatedAt: v.optional(v.number()),
   })

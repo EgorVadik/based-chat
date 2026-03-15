@@ -36,7 +36,7 @@ import {
   Trash2,
   LoaderCircle,
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
@@ -63,7 +63,7 @@ function BrandMark() {
   )
 }
 
-export default function AppSidebar({
+function AppSidebar({
   threads,
   activeThreadId,
   streamingThreadIds,
@@ -95,6 +95,10 @@ export default function AppSidebar({
   const router = useRouter()
   const groups = getThreadsByTimeGroup(threads)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const streamingThreadIdSet = useMemo(
+    () => new Set(streamingThreadIds),
+    [streamingThreadIds],
+  )
   const displayName =
     user.name?.trim() || user.email?.split('@')[0] || 'Signed in'
   const displayEmail = user.email || 'No email available'
@@ -168,7 +172,7 @@ export default function AppSidebar({
                 {group.threads.map((thread) => {
                   const isStreamingThread =
                     thread.isStreaming ||
-                    streamingThreadIds.includes(thread._id)
+                    streamingThreadIdSet.has(thread._id)
 
                   return (
                     <SidebarMenuItem key={thread._id}>
@@ -300,3 +304,43 @@ export default function AppSidebar({
     </Sidebar>
   )
 }
+
+function areThreadListsEqual(left: ThreadSummary[], right: ThreadSummary[]) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((thread, index) => {
+    const otherThread = right[index]
+    if (!otherThread) {
+      return false
+    }
+
+    return (
+      thread._id === otherThread._id &&
+      thread.title === otherThread.title &&
+      thread.updatedAt === otherThread.updatedAt &&
+      thread.isStreaming === otherThread.isStreaming
+    )
+  })
+}
+
+function areSidebarPropsEqual(
+  previousProps: Readonly<Parameters<typeof AppSidebar>[0]>,
+  nextProps: Readonly<Parameters<typeof AppSidebar>[0]>,
+) {
+  return (
+    previousProps.activeThreadId === nextProps.activeThreadId &&
+    previousProps.threadPaginationStatus === nextProps.threadPaginationStatus &&
+    previousProps.user.name === nextProps.user.name &&
+    previousProps.user.email === nextProps.user.email &&
+    previousProps.user.image === nextProps.user.image &&
+    previousProps.streamingThreadIds.length === nextProps.streamingThreadIds.length &&
+    previousProps.streamingThreadIds.every(
+      (threadId, index) => threadId === nextProps.streamingThreadIds[index],
+    ) &&
+    areThreadListsEqual(previousProps.threads, nextProps.threads)
+  )
+}
+
+export default memo(AppSidebar, areSidebarPropsEqual)

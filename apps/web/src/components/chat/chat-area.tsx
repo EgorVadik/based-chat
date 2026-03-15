@@ -3,7 +3,7 @@ import { Skeleton } from "@based-chat/ui/components/skeleton";
 import { SidebarTrigger } from "@based-chat/ui/components/sidebar";
 import { Separator } from "@based-chat/ui/components/separator";
 import { ArrowDown, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createComposerAttachmentFromMessageAttachment,
@@ -121,8 +121,8 @@ export default function ChatArea({
   isThreadPending?: boolean;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
   const hasMessages = messages.length > 0;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [draftMessage, setDraftMessage] = useState("");
@@ -135,6 +135,10 @@ export default function ChatArea({
     lastMessage?.streamStatus === "pending" ||
     lastMessage?.streamStatus === "streaming" ||
     lastMessage?.isStreaming;
+  const drivenStreamMessageIdSet = useMemo(
+    () => new Set(drivenStreamMessageIds),
+    [drivenStreamMessageIds],
+  );
 
   const resetEditingState = useCallback(() => {
     setEditingAttachments((currentAttachments) => {
@@ -147,17 +151,26 @@ export default function ChatArea({
   }, []);
 
   const updateScrollState = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container) {
+    if (scrollFrameRef.current !== null) {
       return;
     }
 
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isAtBottom = distanceFromBottom <= 24;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const container = scrollContainerRef.current;
+      if (!container) {
+        return;
+      }
 
-    isAtBottomRef.current = isAtBottom;
-    setShowScrollToBottom(!isAtBottom);
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const isAtBottom = distanceFromBottom <= 24;
+
+      isAtBottomRef.current = isAtBottom;
+      setShowScrollToBottom((currentValue) =>
+        currentValue === !isAtBottom ? currentValue : !isAtBottom,
+      );
+    });
   }, []);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
@@ -172,6 +185,14 @@ export default function ChatArea({
     });
     isAtBottomRef.current = true;
     setShowScrollToBottom(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -230,7 +251,7 @@ export default function ChatArea({
                 <MessageBubble
                   key={message.id}
                   message={message}
-                  driveStream={drivenStreamMessageIds.includes(message.id)}
+                  driveStream={drivenStreamMessageIdSet.has(message.id)}
                   streamUrl={streamUrl}
                   onStreamStatusChange={(status) =>
                     onMessageStreamStatusChange(message.threadId, message.id, status)
@@ -281,7 +302,6 @@ export default function ChatArea({
                   }}
                 />
               ))}
-              <div ref={messagesEndRef} />
             </div>
           </div>
           {showScrollToBottom ? (

@@ -9,6 +9,7 @@ import { generateText, streamText } from 'ai'
 import type { Id } from './_generated/dataModel'
 import { components, internal } from './_generated/api'
 import {
+  type ActionCtx,
   httpAction,
   internalMutation,
   internalQuery,
@@ -28,6 +29,16 @@ const attachmentValidator = v.object({
   contentType: v.string(),
   size: v.number(),
 })
+const generationStatsValidator = v.object({
+  timeToFirstTokenMs: v.optional(v.number()),
+  tokensPerSecond: v.optional(v.number()),
+  costUsd: v.optional(v.number()),
+  inputTokens: v.optional(v.number()),
+  outputTokens: v.optional(v.number()),
+  totalTokens: v.optional(v.number()),
+  textTokens: v.optional(v.number()),
+  reasoningTokens: v.optional(v.number()),
+})
 
 type StoredAttachment = {
   kind: 'image' | 'file'
@@ -35,6 +46,22 @@ type StoredAttachment = {
   fileName: string
   contentType: string
   size: number
+}
+type ResolvedModelAttachment = {
+  kind: 'image' | 'file'
+  fileName: string
+  contentType: string
+  dataUrl: string
+}
+type GenerationStats = {
+  timeToFirstTokenMs?: number
+  tokensPerSecond?: number
+  costUsd?: number
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  textTokens?: number
+  reasoningTokens?: number
 }
 
 const persistentTextStreaming = new PersistentTextStreaming(
@@ -45,12 +72,29 @@ const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 const THREAD_TITLE_MODEL_ID = 'google/gemini-2.5-flash-lite'
+type StreamEvent =
+  | {
+      type: 'text-delta'
+      text: string
+    }
+  | {
+      type: 'reasoning-delta'
+      text: string
+    }
+  | {
+      type: 'error'
+      errorMessage: string
+    }
+
 const internalMessages = internal.messages as unknown as {
+  getAssistantReplyStopState: any
   applyGeneratedThreadTitle: any
   generateThreadTitle: any
   getStreamGenerationContext: any
   getThreadTitleContext: any
+  markAssistantReplyCompleted: any
   markAssistantReplyError: any
+  setAssistantReplyReasoning: any
 }
 
 async function resolveAttachments(
@@ -69,6 +113,53 @@ async function resolveAttachments(
   )
 }
 
+function encodeBase64(bytes: Uint8Array) {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64')
+  }
+
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+
+  return btoa(binary)
+}
+
+async function resolveModelAttachments(
+  ctx: ActionCtx,
+  attachments: StoredAttachment[] | undefined,
+): Promise<ResolvedModelAttachment[]> {
+  if (!attachments?.length) {
+    return []
+  }
+
+  return (
+    await Promise.all(
+      attachments.map(async (attachment) => {
+        const blob = await ctx.storage.get(attachment.storageId)
+        if (!blob) {
+          return null
+        }
+
+        const contentType =
+          attachment.contentType || blob.type || 'application/octet-stream'
+        const base64Data = encodeBase64(
+          new Uint8Array(await blob.arrayBuffer()),
+        )
+
+        return {
+          kind: attachment.kind,
+          fileName: attachment.fileName,
+          contentType,
+          dataUrl: `data:${contentType};base64,${base64Data}`,
+        }
+      }),
+    )
+  ).filter((attachment): attachment is ResolvedModelAttachment => attachment != null)
+}
+
 async function toClientMessage(
   ctx: QueryCtx | MutationCtx,
   message: {
@@ -78,9 +169,11 @@ async function toClientMessage(
     role: 'user' | 'system'
     modelId: string
     content: string
+    reasoningText?: string
     streamId?: string
     errorMessage?: string
     attachments?: StoredAttachment[]
+    generationStats?: GenerationStats
     createdAt: number
     updatedAt?: number
   },
@@ -95,10 +188,95 @@ async function toClientMessage(
   return {
     ...message,
     content: streamBody?.text ?? message.content,
+    reasoningText: message.reasoningText,
     streamStatus: streamBody?.status,
     errorMessage: message.errorMessage,
     attachments: await resolveAttachments(ctx, message.attachments),
+    generationStats: message.generationStats,
   }
+}
+
+function buildGenerationStats({
+  startedAt,
+  firstTextDeltaAt,
+  completedAt,
+  costUsd,
+  totalUsage,
+}: {
+  startedAt: number
+  firstTextDeltaAt?: number
+  completedAt: number
+  costUsd?: number
+  totalUsage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    outputTokenDetails?: {
+      textTokens?: number
+      reasoningTokens?: number
+    }
+  }
+}): GenerationStats | undefined {
+  const textTokens = totalUsage?.outputTokenDetails?.textTokens
+  const outputTokens = totalUsage?.outputTokens
+  const visibleOutputTokens = textTokens ?? outputTokens
+  const streamDurationMs =
+    firstTextDeltaAt == null
+      ? undefined
+      : Math.max(1, completedAt - firstTextDeltaAt)
+
+  const generationStats: GenerationStats = {
+    timeToFirstTokenMs:
+      firstTextDeltaAt == null
+        ? undefined
+        : Math.max(0, firstTextDeltaAt - startedAt),
+    tokensPerSecond:
+      visibleOutputTokens == null || streamDurationMs == null
+        ? undefined
+        : visibleOutputTokens / (streamDurationMs / 1000),
+    costUsd,
+    inputTokens: totalUsage?.inputTokens,
+    outputTokens,
+    totalTokens: totalUsage?.totalTokens,
+    textTokens,
+    reasoningTokens: totalUsage?.outputTokenDetails?.reasoningTokens,
+  }
+
+  return Object.values(generationStats).some((value) => value != null)
+    ? generationStats
+    : undefined
+}
+
+function extractOpenRouterCostUsd(providerMetadata: unknown) {
+  if (!providerMetadata || typeof providerMetadata !== 'object') {
+    return undefined
+  }
+
+  const openrouterMetadata = (
+    providerMetadata as {
+      openrouter?: {
+        usage?: {
+          cost?: number
+          costDetails?: {
+            upstreamInferenceCost?: number
+          }
+        }
+      }
+    }
+  ).openrouter
+
+  return (
+    openrouterMetadata?.usage?.cost ??
+    openrouterMetadata?.usage?.costDetails?.upstreamInferenceCost
+  )
+}
+
+function shouldPersistChunk(text: string) {
+  return text.includes('.') || text.includes('!') || text.includes('?')
+}
+
+function encodeStreamEvent(event: StreamEvent) {
+  return `${JSON.stringify(event)}\n`
 }
 
 function formatStreamErrorMessage(error: unknown) {
@@ -200,7 +378,10 @@ function formatThreadTitlePrompt(
   const attachmentSummary =
     attachments && attachments.length > 0
       ? attachments
-          .map((attachment) => `${attachment.fileName} (${attachment.contentType})`)
+          .map(
+            (attachment) =>
+              `${attachment.fileName} (${attachment.contentType})`,
+          )
           .join(', ')
       : 'None'
 
@@ -440,7 +621,9 @@ export const getThreadTitleContext = internalQuery({
 
     const firstUserMessage = await ctx.db
       .query('messages')
-      .withIndex('by_threadId_createdAt', (q) => q.eq('threadId', args.threadId))
+      .withIndex('by_threadId_createdAt', (q) =>
+        q.eq('threadId', args.threadId),
+      )
       .order('asc')
       .filter((q) => q.eq(q.field('role'), 'user'))
       .first()
@@ -520,13 +703,10 @@ export const generateThreadTitle: any = internalAction({
       })
     }
 
-    return await ctx.runMutation(
-      internalMessages.applyGeneratedThreadTitle,
-      {
-        threadId: args.threadId,
-        title: nextTitle,
-      },
-    )
+    return await ctx.runMutation(internalMessages.applyGeneratedThreadTitle, {
+      threadId: args.threadId,
+      title: nextTitle,
+    })
   },
 })
 
@@ -564,14 +744,10 @@ export const createThreadWithFirstMessage = mutation({
       updatedAt: timestamp,
     })
 
-    await ctx.scheduler.runAfter(
-      0,
-      internalMessages.generateThreadTitle,
-      {
-        threadId,
-        messageId,
-      },
-    )
+    await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
+      threadId,
+      messageId,
+    })
 
     return {
       thread: {
@@ -609,7 +785,9 @@ export const create = mutation({
     const attachments = args.attachments ?? []
     const firstMessage = await ctx.db
       .query('messages')
-      .withIndex('by_threadId_createdAt', (q) => q.eq('threadId', args.threadId))
+      .withIndex('by_threadId_createdAt', (q) =>
+        q.eq('threadId', args.threadId),
+      )
       .order('asc')
       .first()
 
@@ -637,19 +815,11 @@ export const create = mutation({
 
     await ctx.db.patch(args.threadId, threadPatch)
 
-    if (
-      args.role === 'user' &&
-      thread.title === 'New chat' &&
-      !firstMessage
-    ) {
-      await ctx.scheduler.runAfter(
-        0,
-        internalMessages.generateThreadTitle,
-        {
-          threadId: args.threadId,
-          messageId,
-        },
-      )
+    if (args.role === 'user' && thread.title === 'New chat' && !firstMessage) {
+      await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
+        threadId: args.threadId,
+        messageId,
+      })
     }
 
     return await toClientMessage(ctx, {
@@ -747,14 +917,10 @@ export const edit = mutation({
     })
 
     if (targetIndex === 0 && thread.title === 'New chat') {
-      await ctx.scheduler.runAfter(
-        0,
-        internalMessages.generateThreadTitle,
-        {
-          threadId: args.threadId,
-          messageId: args.messageId,
-        },
-      )
+      await ctx.scheduler.runAfter(0, internalMessages.generateThreadTitle, {
+        threadId: args.threadId,
+        messageId: args.messageId,
+      })
     }
 
     return {
@@ -818,7 +984,9 @@ export const createAssistantReply = mutation({
       role: 'system',
       modelId: args.modelId,
       content: '',
+      reasoningText: undefined,
       streamId,
+      stopRequestedAt: undefined,
       errorMessage: undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -835,11 +1003,41 @@ export const createAssistantReply = mutation({
       role: 'system' as const,
       modelId: args.modelId,
       content: '',
+      reasoningText: undefined,
       streamId,
       errorMessage: undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
     })
+  },
+})
+
+export const abortAssistantReply = mutation({
+  args: {
+    streamId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+    if (!message) {
+      return null
+    }
+
+    await getAuthorizedThread(ctx, message.threadId)
+
+    if (
+      !message.streamId ||
+      (message.errorMessage && message.errorMessage.length > 0)
+    ) {
+      return null
+    }
+
+    await ctx.db.patch(message._id, {
+      stopRequestedAt: Date.now(),
+    })
+
+    return {
+      messageId: message._id,
+    }
   },
 })
 
@@ -858,6 +1056,59 @@ export const markAssistantReplyError = internalMutation({
       errorMessage: args.errorMessage,
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const markAssistantReplyCompleted = internalMutation({
+  args: {
+    streamId: v.string(),
+    generationStats: generationStatsValidator,
+  },
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+    if (!message) {
+      return
+    }
+
+    await ctx.db.patch(message._id, {
+      generationStats: args.generationStats,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const setAssistantReplyReasoning = internalMutation({
+  args: {
+    streamId: v.string(),
+    reasoningText: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+    if (!message) {
+      return
+    }
+
+    await ctx.db.patch(message._id, {
+      reasoningText: args.reasoningText,
+    })
+  },
+})
+
+export const getAssistantReplyStopState = internalQuery({
+  args: {
+    streamId: v.string(),
+  },
+  returns: v.object({
+    stopRequested: v.boolean(),
+    errorMessage: v.optional(v.string()),
+  }),
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+
+    return {
+      stopRequested: Boolean(message?.stopRequestedAt),
+      errorMessage: message?.errorMessage,
+    }
   },
 })
 
@@ -960,7 +1211,15 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
   }
 
   const conversationMessages = toModelMessages(
-    generationContext.conversationMessages,
+    await Promise.all(
+      generationContext.conversationMessages.map(async (message) => ({
+        ...message,
+        attachments:
+          message.role === 'user'
+            ? await resolveModelAttachments(ctx, message.attachments)
+            : [],
+      })),
+    ),
   )
   const modelId = getOpenRouterModelId(generationContext.modelId)
 
@@ -971,83 +1230,282 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
     messageCount: conversationMessages.length,
   })
 
+  const streamState = await ctx.runQuery(
+    persistentTextStreaming.component.lib.getStreamStatus,
+    {
+      streamId: streamId as StreamId,
+    },
+  )
+  if (streamState !== 'pending') {
+    return applyCorsHeaders(
+      new Response('', {
+        status: 205,
+      }),
+      request,
+    )
+  }
+
   let chunkCount = 0
   let response: Response
   try {
-    response = await persistentTextStreaming.stream(
-      ctx,
-      request,
-      streamId as StreamId,
-      async (_ctx, _request, _streamId, appendChunk) => {
-        let streamFailureMessage: string | undefined
-        let rawStreamFailureMessage: string | undefined
+    const { readable, writable } = new TransformStream()
+    const writer = writable.getWriter()
+    const textEncoder = new TextEncoder()
+    let writerClosed = false
+    let writerDisconnected = false
 
-        try {
-          const result = streamText({
-            model: openrouter(modelId),
-            messages: conversationMessages,
-            abortSignal: request.signal,
-            onError({ error }) {
-              rawStreamFailureMessage = extractRawStreamErrorMessage(error)
-              streamFailureMessage = formatStreamErrorMessage(error)
-              console.error('[stream:http] provider-error', {
-                streamId,
-                userId: user._id,
-                modelId,
-                error: rawStreamFailureMessage,
-              })
-            },
-          })
+    const closeWriter = async () => {
+      if (writerClosed || writerDisconnected) {
+        return
+      }
 
-          for await (const part of result.fullStream) {
-            switch (part.type) {
-              case 'text-delta': {
-                chunkCount += 1
-                if (chunkCount <= 3 || chunkCount % 25 === 0) {
-                  console.log('[stream:http] chunk', {
-                    streamId,
-                    userId: user._id,
-                    chunkCount,
-                    chunkLength: part.text.length,
-                  })
-                }
-                await appendChunk(part.text)
-                break
-              }
-              case 'error': {
-                throw part.error
-              }
-              case 'abort': {
-                throw new Error('The reply was aborted before completion.')
-              }
-              case 'tool-error': {
-                throw part.error
-              }
-              default: {
-                break
-              }
+      writerClosed = true
+      try {
+        await writer.close()
+      } catch {
+        writerDisconnected = true
+      }
+    }
+
+    const writeEvent = async (event: StreamEvent) => {
+      if (writerClosed || writerDisconnected) {
+        return
+      }
+
+      try {
+        await writer.write(textEncoder.encode(encodeStreamEvent(event)))
+      } catch {
+        writerDisconnected = true
+      }
+    }
+
+    const doStream = async () => {
+      let streamFailureMessage: string | undefined
+      let rawStreamFailureMessage: string | undefined
+      const generationStartedAt = Date.now()
+      const reasoningFlushThreshold = 96
+      const generationAbortController = new AbortController()
+      let firstTextDeltaAt: number | undefined
+      let reasoningText = ''
+      let lastPersistedReasoningText = ''
+      let costUsd: number | undefined
+      let persistedText = ''
+      let totalUsage:
+        | {
+            inputTokens?: number
+            outputTokens?: number
+            totalTokens?: number
+            outputTokenDetails?: {
+              textTokens?: number
+              reasoningTokens?: number
             }
           }
-
-          if (streamFailureMessage) {
-            throw new Error(streamFailureMessage)
-          }
-        } catch (error) {
-          const errorMessage =
-            streamFailureMessage ?? formatStreamErrorMessage(error)
-          const rawErrorMessage =
-            rawStreamFailureMessage ?? extractRawStreamErrorMessage(error)
-          await _ctx.runMutation(
-            internalMessages.markAssistantReplyError,
-            {
+        | undefined
+      const stopPollingInterval = setInterval(() => {
+        void ctx
+          .runQuery(internalMessages.getAssistantReplyStopState, {
+            streamId,
+          })
+          .then(({ stopRequested }) => {
+            if (stopRequested) {
+              generationAbortController.abort()
+            }
+          })
+          .catch((error) => {
+            console.error('[stream:http] stop-state-error', {
               streamId,
-              errorMessage,
-            },
-          )
-          throw error instanceof Error ? error : new Error(rawErrorMessage)
+              userId: user._id,
+              modelId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          })
+      }, 250)
+
+      const flushPersistedText = async (final = false) => {
+        if (!persistedText) {
+          if (final) {
+            await ctx.runMutation(
+              persistentTextStreaming.component.lib.setStreamStatus,
+              {
+                streamId: streamId as StreamId,
+                status: 'done',
+              },
+            )
+          }
+          return
         }
+
+        await ctx.runMutation(persistentTextStreaming.component.lib.addChunk, {
+          streamId: streamId as StreamId,
+          text: persistedText,
+          final,
+        })
+        persistedText = ''
+      }
+
+      try {
+        const result = streamText({
+          model: openrouter(modelId),
+          messages: conversationMessages,
+          abortSignal: generationAbortController.signal,
+          onError({ error }) {
+            rawStreamFailureMessage = extractRawStreamErrorMessage(error)
+            streamFailureMessage = formatStreamErrorMessage(error)
+            console.error('[stream:http] provider-error', {
+              streamId,
+              userId: user._id,
+              modelId,
+              error: rawStreamFailureMessage,
+            })
+          },
+        })
+
+        const flushReasoningText = async (force = false) => {
+          if (!reasoningText || reasoningText === lastPersistedReasoningText) {
+            return
+          }
+
+          if (
+            !force &&
+            reasoningText.length - lastPersistedReasoningText.length <
+              reasoningFlushThreshold
+          ) {
+            return
+          }
+
+          lastPersistedReasoningText = reasoningText
+          await ctx.runMutation(internalMessages.setAssistantReplyReasoning, {
+            streamId,
+            reasoningText,
+          })
+        }
+
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case 'reasoning-delta': {
+              reasoningText += part.text
+              await writeEvent({
+                type: 'reasoning-delta',
+                text: part.text,
+              })
+              await flushReasoningText()
+              break
+            }
+            case 'text-delta': {
+              chunkCount += 1
+              firstTextDeltaAt ??= Date.now()
+              if (chunkCount <= 3 || chunkCount % 25 === 0) {
+                console.log('[stream:http] chunk', {
+                  streamId,
+                  userId: user._id,
+                  chunkCount,
+                  chunkLength: part.text.length,
+                })
+              }
+
+              await writeEvent({
+                type: 'text-delta',
+                text: part.text,
+              })
+              persistedText += part.text
+              if (shouldPersistChunk(part.text)) {
+                await flushPersistedText(false)
+              }
+              break
+            }
+            case 'reasoning-end': {
+              await flushReasoningText(true)
+              break
+            }
+            case 'error': {
+              throw part.error
+            }
+            case 'abort': {
+              throw new Error('The reply was aborted before completion.')
+            }
+            case 'tool-error': {
+              throw part.error
+            }
+            case 'finish': {
+              totalUsage = part.totalUsage
+              break
+            }
+            case 'finish-step': {
+              costUsd = extractOpenRouterCostUsd(part.providerMetadata)
+              break
+            }
+            default: {
+              break
+            }
+          }
+        }
+
+        if (streamFailureMessage) {
+          throw new Error(streamFailureMessage)
+        }
+
+        await flushReasoningText(true)
+        await flushPersistedText(true)
+
+        const generationStats = buildGenerationStats({
+          startedAt: generationStartedAt,
+          firstTextDeltaAt,
+          completedAt: Date.now(),
+          costUsd,
+          totalUsage,
+        })
+
+        if (generationStats) {
+          await ctx.runMutation(internalMessages.markAssistantReplyCompleted, {
+            streamId,
+            generationStats,
+          })
+        }
+
+        await closeWriter()
+      } catch (error) {
+        const errorMessage =
+          streamFailureMessage ?? formatStreamErrorMessage(error)
+        const rawErrorMessage =
+          rawStreamFailureMessage ?? extractRawStreamErrorMessage(error)
+
+        await ctx.runMutation(
+          persistentTextStreaming.component.lib.setStreamStatus,
+          {
+            streamId: streamId as StreamId,
+            status: 'error',
+          },
+        )
+        await ctx.runMutation(internalMessages.markAssistantReplyError, {
+          streamId,
+          errorMessage,
+        })
+        await writeEvent({
+          type: 'error',
+          errorMessage,
+        })
+        await closeWriter()
+        throw error instanceof Error ? error : new Error(rawErrorMessage)
+      } finally {
+        clearInterval(stopPollingInterval)
+      }
+    }
+
+    void doStream().catch((error) => {
+      console.error('[stream:http] stream-task-failed', {
+        streamId,
+        userId: user._id,
+        modelId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+
+    response = new Response(readable, {
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
       },
-    )
+    })
   } catch (error) {
     console.error('[stream:http] generation-error', {
       streamId,

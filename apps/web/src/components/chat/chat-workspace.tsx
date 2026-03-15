@@ -39,11 +39,13 @@ type PersistedMessagePayload = {
   threadId: Id<'threads'>
   role: ChatMessage['role']
   content: string
+  reasoningText?: string
   attachments?: MessageAttachment[]
   modelId: string
   streamId?: string
   streamStatus?: ChatMessage['streamStatus']
   errorMessage?: string
+  generationStats?: ChatMessage['generationStats']
   createdAt: number
   updatedAt?: number
 }
@@ -91,6 +93,69 @@ function mergeThreads(
   )
 }
 
+function areMessageAttachmentsEqual(
+  left: MessageAttachment[],
+  right: MessageAttachment[],
+) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((attachment, index) => {
+    const otherAttachment = right[index]
+    if (!otherAttachment) {
+      return false
+    }
+
+    return (
+      attachment.kind === otherAttachment.kind &&
+      attachment.storageId === otherAttachment.storageId &&
+      attachment.fileName === otherAttachment.fileName &&
+      attachment.contentType === otherAttachment.contentType &&
+      attachment.size === otherAttachment.size &&
+      attachment.url === otherAttachment.url
+    )
+  })
+}
+
+function areChatMessagesEqual(left: ChatMessage, right: ChatMessage) {
+  return (
+    left.id === right.id &&
+    left.threadId === right.threadId &&
+    left.role === right.role &&
+    left.content === right.content &&
+    left.reasoningText === right.reasoningText &&
+    left.modelId === right.modelId &&
+    left.model?.id === right.model?.id &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.streamId === right.streamId &&
+    left.streamStatus === right.streamStatus &&
+    left.errorMessage === right.errorMessage &&
+    left.generationStats?.timeToFirstTokenMs ===
+      right.generationStats?.timeToFirstTokenMs &&
+    left.generationStats?.tokensPerSecond ===
+      right.generationStats?.tokensPerSecond &&
+    left.generationStats?.costUsd === right.generationStats?.costUsd &&
+    left.generationStats?.inputTokens === right.generationStats?.inputTokens &&
+    left.generationStats?.outputTokens === right.generationStats?.outputTokens &&
+    left.generationStats?.totalTokens === right.generationStats?.totalTokens &&
+    left.generationStats?.textTokens === right.generationStats?.textTokens &&
+    left.generationStats?.reasoningTokens ===
+      right.generationStats?.reasoningTokens &&
+    left.isStreaming === right.isStreaming &&
+    areMessageAttachmentsEqual(left.attachments, right.attachments)
+  )
+}
+
+function areChatMessageListsEqual(left: ChatMessage[], right: ChatMessage[]) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((message, index) => areChatMessagesEqual(message, right[index]!))
+}
+
 export default function ChatWorkspace({
   routeThreadId = null,
 }: {
@@ -125,6 +190,9 @@ export default function ChatWorkspace({
   const createAssistantReply = useMutation(
     (api.messages as { createAssistantReply: any }).createAssistantReply,
   )
+  const abortAssistantReply = useMutation(
+    (api.messages as { abortAssistantReply: any }).abortAssistantReply,
+  )
   const generateAttachmentUploadUrl = useMutation(
     (api.messages as { generateAttachmentUploadUrl: any })
       .generateAttachmentUploadUrl,
@@ -157,6 +225,13 @@ export default function ChatWorkspace({
   const persistedMessages = useQuery(
     api.messages.listByThread,
     isAuthenticated && activeThreadId ? { threadId: activeThreadId } : 'skip',
+  )
+  const mappedPersistedMessages = useMemo(
+    () =>
+      ((persistedMessages as PersistedMessagePayload[] | undefined)?.map(
+        toChatMessage,
+      ) ?? []) as ChatMessage[],
+    [persistedMessages],
   )
   const prefetchedThreadIdsRef = useRef(new Set<ThreadSummary['_id']>())
   const prefetchPromisesRef = useRef(
@@ -218,13 +293,18 @@ export default function ChatWorkspace({
       return
     }
 
-    setMessageCache((currentCache) => ({
-      ...currentCache,
-      [activeThreadId]: (persistedMessages as PersistedMessagePayload[]).map(
-        toChatMessage,
-      ),
-    }))
-  }, [activeThreadId, persistedMessages])
+    setMessageCache((currentCache) => {
+      const currentMessages = currentCache[activeThreadId] ?? []
+      if (areChatMessageListsEqual(currentMessages, mappedPersistedMessages)) {
+        return currentCache
+      }
+
+      return {
+        ...currentCache,
+        [activeThreadId]: mappedPersistedMessages,
+      }
+    })
+  }, [activeThreadId, mappedPersistedMessages, persistedMessages])
 
   useEffect(() => {
     if (allThreads.length > 0) {
@@ -241,11 +321,9 @@ export default function ChatWorkspace({
   const activeMessages = useMemo(
     () =>
       (activeThreadId ? messageCache[activeThreadId] : undefined) ??
-      (persistedMessages as PersistedMessagePayload[] | undefined)?.map(
-        toChatMessage,
-      ) ??
+      mappedPersistedMessages ??
       [],
-    [activeThreadId, messageCache, persistedMessages],
+    [activeThreadId, mappedPersistedMessages, messageCache],
   )
 
   useEffect(() => {
@@ -270,11 +348,9 @@ export default function ChatWorkspace({
     (threadId: ThreadSummary['_id']) =>
       messageCache[threadId] ??
       (threadId === activeThreadId
-        ? ((persistedMessages as PersistedMessagePayload[] | undefined)?.map(
-            toChatMessage,
-          ) ?? [])
+        ? mappedPersistedMessages
         : []),
-    [activeThreadId, messageCache, persistedMessages],
+    [activeThreadId, mappedPersistedMessages, messageCache],
   )
 
   const appendCachedMessage = useCallback(
@@ -562,12 +638,14 @@ export default function ChatWorkspace({
         threadId,
         role: 'system',
         content: createdAssistantMessage.content,
+        reasoningText: createdAssistantMessage.reasoningText,
         attachments: createdAssistantMessage.attachments ?? [],
         modelId: model.id,
         model,
         streamId: createdAssistantMessage.streamId,
         streamStatus: createdAssistantMessage.streamStatus,
         errorMessage: createdAssistantMessage.errorMessage,
+        generationStats: createdAssistantMessage.generationStats,
         createdAt: createdAssistantMessage.createdAt,
         updatedAt: createdAssistantMessage.updatedAt,
       })
@@ -749,7 +827,9 @@ export default function ChatWorkspace({
       )
 
       setMessageCache((currentCache) => {
-        const sourceMessages = getThreadMessages(threadId)
+        const sourceMessages =
+          currentCache[threadId] ??
+          (threadId === activeThreadId ? mappedPersistedMessages : [])
         const deletedMessageIds = new Set<string>(editResult.deletedMessageIds)
         const prunedMessages = sourceMessages.filter(
           (currentMessage) => !deletedMessageIds.has(currentMessage.id),
@@ -785,7 +865,7 @@ export default function ChatWorkspace({
         model: nextModel,
       })
     },
-    [editMessage, getThreadMessages, startAssistantReply],
+    [activeThreadId, editMessage, mappedPersistedMessages, startAssistantReply],
   )
 
   const handleEditMessage = useCallback(
@@ -877,8 +957,11 @@ export default function ChatWorkspace({
       return
     }
 
+    void abortAssistantReply({
+      streamId: pendingAssistantMessage.streamId,
+    })
     abortPersistentTextStream(pendingAssistantMessage.streamId as StreamId)
-  }, [activeMessages, activeThreadId])
+  }, [abortAssistantReply, activeMessages, activeThreadId])
 
   const activeThreadIsStreaming = Boolean(
     activeThreadId &&

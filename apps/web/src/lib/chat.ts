@@ -5,12 +5,23 @@ import { getModelById, type Model } from "@/lib/models";
 
 export type MessageRole = "user" | "system";
 export type StreamStatus = "pending" | "streaming" | "done" | "error" | "timeout";
+export type MessageGenerationStats = {
+  timeToFirstTokenMs?: number;
+  tokensPerSecond?: number;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  textTokens?: number;
+  reasoningTokens?: number;
+};
 
 export type ChatMessage = {
   id: string;
   threadId?: Id<"threads">;
   role: MessageRole;
   content: string;
+  reasoningText?: string;
   attachments: MessageAttachment[];
   modelId?: string;
   model?: Model;
@@ -19,6 +30,7 @@ export type ChatMessage = {
   streamId?: string;
   streamStatus?: StreamStatus;
   errorMessage?: string;
+  generationStats?: MessageGenerationStats;
   isStreaming?: boolean;
 };
 
@@ -27,11 +39,13 @@ type MessageLike = {
   threadId: Id<"threads">;
   role: MessageRole;
   content: string;
+  reasoningText?: string;
   attachments?: MessageAttachment[];
   modelId?: string;
   streamId?: string;
   streamStatus?: StreamStatus;
   errorMessage?: string;
+  generationStats?: MessageGenerationStats;
   createdAt: number;
   updatedAt?: number;
 };
@@ -44,12 +58,14 @@ export function toChatMessage(
     threadId: message.threadId,
     role: message.role,
     content: message.content,
+    reasoningText: message.reasoningText,
     attachments: message.attachments ?? [],
     modelId: message.modelId,
     model: message.modelId ? getModelById(message.modelId) : undefined,
     streamId: message.streamId,
     streamStatus: message.streamStatus,
     errorMessage: message.errorMessage,
+    generationStats: message.generationStats,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
   };

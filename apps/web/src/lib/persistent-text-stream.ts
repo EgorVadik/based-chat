@@ -1,7 +1,14 @@
 import type { StreamBody, StreamId } from "@convex-dev/persistent-text-streaming";
 import type { FunctionReference } from "convex/server";
 import { useQuery } from "convex/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { authClient } from "@/lib/auth-client";
 
@@ -15,6 +22,7 @@ type StreamStartResult = {
 };
 type PersistentStreamState = PersistentBody & {
   errorMessage?: string;
+  reasoningText?: string;
 };
 
 const TERMINAL_STATUSES = new Set<StreamStatus>(["done", "error", "timeout"]);
@@ -38,11 +46,15 @@ export function usePersistentTextStream(
 ) {
   const [streamEnded, setStreamEnded] = useState<boolean | null>(null);
   const [streamBody, setStreamBody] = useState("");
+  const [streamReasoningBody, setStreamReasoningBody] = useState("");
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | undefined>(
     undefined,
   );
   const [didPersistenceStall, setDidPersistenceStall] = useState(false);
   const streamStarted = useRef(false);
+  const pendingChunkRef = useRef("");
+  const pendingReasoningChunkRef = useRef("");
+  const animationFrameRef = useRef<number | null>(null);
 
   const persistentBody = useQuery(
     getPersistentBody,
@@ -56,13 +68,61 @@ export function usePersistentTextStream(
       persistentBody.status === "done");
   const hasDirectStreamText = streamBody.length > 0;
 
+  const flushPendingChunks = useCallback(() => {
+    const chunk = pendingChunkRef.current;
+    const reasoningChunk = pendingReasoningChunkRef.current;
+
+    if (!chunk && !reasoningChunk) {
+      return;
+    }
+
+    pendingChunkRef.current = "";
+    pendingReasoningChunkRef.current = "";
+    startTransition(() => {
+      if (chunk) {
+        setStreamBody((currentBody) => currentBody + chunk);
+      }
+
+      if (reasoningChunk) {
+        setStreamReasoningBody((currentBody) => currentBody + reasoningChunk);
+      }
+    });
+  }, []);
+
+  const scheduleChunkFlush = useCallback(() => {
+    if (animationFrameRef.current !== null) {
+      return;
+    }
+
+    animationFrameRef.current = window.requestAnimationFrame(() => {
+      animationFrameRef.current = null;
+      flushPendingChunks();
+    });
+  }, [flushPendingChunks]);
+
   useEffect(() => {
+    if (animationFrameRef.current !== null) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    pendingChunkRef.current = "";
+    pendingReasoningChunkRef.current = "";
     setStreamEnded(null);
     setStreamBody("");
+    setStreamReasoningBody("");
     setStreamErrorMessage(undefined);
     setDidPersistenceStall(false);
     streamStarted.current = false;
   }, [streamId]);
+
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!driven || !streamId || streamStarted.current) {
@@ -72,12 +132,22 @@ export function usePersistentTextStream(
     streamStarted.current = true;
     let cancelled = false;
 
-    void startStreaming(streamUrl, streamId, (text) => {
-      if (!cancelled) {
-        setStreamBody((currentBody) => currentBody + text);
-      }
+    void startStreaming(streamUrl, streamId, {
+      onTextDelta(text) {
+        if (!cancelled) {
+          pendingChunkRef.current += text;
+          scheduleChunkFlush();
+        }
+      },
+      onReasoningDelta(text) {
+        if (!cancelled) {
+          pendingReasoningChunkRef.current += text;
+          scheduleChunkFlush();
+        }
+      },
     }).then((result) => {
       if (!cancelled) {
+        flushPendingChunks();
         setStreamEnded(result.ok);
         setStreamErrorMessage(result.errorMessage);
       }
@@ -86,7 +156,7 @@ export function usePersistentTextStream(
     return () => {
       cancelled = true;
     };
-  }, [driven, streamId, streamUrl]);
+  }, [driven, flushPendingChunks, scheduleChunkFlush, streamId, streamUrl]);
 
   useEffect(() => {
     if (
@@ -121,6 +191,7 @@ export function usePersistentTextStream(
         text: persistentBody.text || streamBody,
         status: "error",
         errorMessage: persistentBody.errorMessage,
+        reasoningText: streamReasoningBody || undefined,
       };
     }
 
@@ -132,6 +203,7 @@ export function usePersistentTextStream(
           persistentBody.status === "error" || persistentBody.status === "timeout"
             ? persistentBody.errorMessage ?? streamErrorMessage
             : undefined,
+        reasoningText: streamReasoningBody || undefined,
       };
     }
 
@@ -141,6 +213,7 @@ export function usePersistentTextStream(
           text: persistentText || streamBody,
           status: persistentBody!.status,
           errorMessage: persistentBody?.errorMessage,
+          reasoningText: streamReasoningBody || undefined,
         };
       }
 
@@ -151,6 +224,7 @@ export function usePersistentTextStream(
           persistentBody?.errorMessage ??
           streamErrorMessage ??
           "Reply failed to stream. Retry to generate again.",
+        reasoningText: streamReasoningBody || undefined,
       };
     }
 
@@ -174,12 +248,14 @@ export function usePersistentTextStream(
               ? "pending"
               : "streaming",
           errorMessage: persistentBody?.errorMessage ?? streamErrorMessage,
+          reasoningText: streamReasoningBody || undefined,
         };
       }
 
       return {
         text: streamBody,
         status: hasDirectStreamText ? "streaming" : "pending",
+        reasoningText: streamReasoningBody || undefined,
       };
     }
 
@@ -197,16 +273,34 @@ export function usePersistentTextStream(
     persistentBody,
     persistentText,
     streamBody,
+    streamReasoningBody,
     streamEnded,
     streamErrorMessage,
     streamId,
   ]);
 }
 
+type StreamEvent =
+  | {
+      type: "text-delta";
+      text: string;
+    }
+  | {
+      type: "reasoning-delta";
+      text: string;
+    }
+  | {
+      type: "error";
+      errorMessage: string;
+    };
+
 async function startStreaming(
   url: URL,
   streamId: StreamId,
-  onUpdate: (text: string) => void,
+  handlers: {
+    onTextDelta: (text: string) => void;
+    onReasoningDelta: (text: string) => void;
+  },
 ): Promise<StreamStartResult> {
   const abortController = new AbortController();
   streamAbortControllers.set(streamId, abortController);
@@ -253,6 +347,7 @@ async function startStreaming(
   }
 
   if (!response.ok || !response.body) {
+    streamAbortControllers.delete(streamId);
     let errorMessage = `Streaming request failed with ${response.status}.`;
     try {
       const responseText = (await response.text()).trim();
@@ -275,18 +370,59 @@ async function startStreaming(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  let bufferedResponseText = "";
+  let streamEventErrorMessage: string | undefined;
+
+  const processBufferedResponse = () => {
+    const responseLines = bufferedResponseText.split("\n");
+    bufferedResponseText = responseLines.pop() ?? "";
+
+    for (const responseLine of responseLines) {
+      const trimmedLine = responseLine.trim();
+      if (!trimmedLine) {
+        continue;
+      }
+
+      let streamEvent: StreamEvent;
+      try {
+        streamEvent = JSON.parse(trimmedLine) as StreamEvent;
+      } catch {
+        continue;
+      }
+
+      if (streamEvent.type === "text-delta") {
+        handlers.onTextDelta(streamEvent.text);
+        continue;
+      }
+
+      if (streamEvent.type === "reasoning-delta") {
+        handlers.onReasoningDelta(streamEvent.text);
+        continue;
+      }
+
+      if (streamEvent.type === "error") {
+        streamEventErrorMessage = streamEvent.errorMessage;
+      }
+    }
+  };
 
   while (true) {
     try {
       const { done, value } = await reader.read();
 
       if (value) {
-        onUpdate(decoder.decode(value, { stream: !done }));
+        bufferedResponseText += decoder.decode(value, { stream: !done });
+        processBufferedResponse();
       }
 
       if (done) {
+        bufferedResponseText += decoder.decode();
+        processBufferedResponse();
         streamAbortControllers.delete(streamId);
-        return { ok: true };
+        return {
+          ok: streamEventErrorMessage == null,
+          errorMessage: streamEventErrorMessage,
+        };
       }
     } catch (error) {
       streamAbortControllers.delete(streamId);

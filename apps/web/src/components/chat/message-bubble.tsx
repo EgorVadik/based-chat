@@ -9,7 +9,11 @@ import {
 import { cn } from '@based-chat/ui/lib/utils'
 import {
   ArrowUp,
+  Brain,
+  ChevronDown,
+  Clock3,
   Copy,
+  Cpu,
   FileCode2,
   FileText,
   Pencil,
@@ -17,8 +21,9 @@ import {
   RotateCcw,
   Sparkles,
   X,
+  Zap,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import type { ComposerAttachment } from '@/lib/attachments'
@@ -37,6 +42,111 @@ import ChatAttachmentDialog from './chat-attachment-dialog'
 import ModelSelector from './model-selector'
 import MarkdownRenderer from './markdown-renderer'
 import type { StreamId } from '@convex-dev/persistent-text-streaming'
+
+function areMessageAttachmentsEqual(
+  left: ChatMessage['attachments'],
+  right: ChatMessage['attachments'],
+) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((attachment, index) => {
+    const otherAttachment = right[index]
+    if (!otherAttachment) {
+      return false
+    }
+
+    return (
+      attachment.kind === otherAttachment.kind &&
+      attachment.storageId === otherAttachment.storageId &&
+      attachment.fileName === otherAttachment.fileName &&
+      attachment.contentType === otherAttachment.contentType &&
+      attachment.size === otherAttachment.size &&
+      attachment.url === otherAttachment.url
+    )
+  })
+}
+
+function areComposerAttachmentsEqual(
+  left: ComposerAttachment[],
+  right: ComposerAttachment[],
+) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((attachment, index) => {
+    const otherAttachment = right[index]
+    if (!otherAttachment) {
+      return false
+    }
+
+    return (
+      attachment.id === otherAttachment.id &&
+      attachment.source === otherAttachment.source &&
+      attachment.kind === otherAttachment.kind &&
+      attachment.fileName === otherAttachment.fileName &&
+      attachment.contentType === otherAttachment.contentType &&
+      attachment.size === otherAttachment.size &&
+      attachment.previewUrl === otherAttachment.previewUrl &&
+      ('storageId' in attachment
+        ? attachment.storageId ===
+          (('storageId' in otherAttachment
+            ? otherAttachment.storageId
+            : undefined) ?? undefined)
+        : !('storageId' in (otherAttachment ?? {})))
+    )
+  })
+}
+
+function areMessagesEqual(left: ChatMessage, right: ChatMessage) {
+  return (
+    left.id === right.id &&
+    left.threadId === right.threadId &&
+    left.role === right.role &&
+    left.content === right.content &&
+    left.reasoningText === right.reasoningText &&
+    left.modelId === right.modelId &&
+    left.model?.id === right.model?.id &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.streamId === right.streamId &&
+    left.streamStatus === right.streamStatus &&
+    left.errorMessage === right.errorMessage &&
+    left.generationStats?.timeToFirstTokenMs ===
+      right.generationStats?.timeToFirstTokenMs &&
+    left.generationStats?.tokensPerSecond ===
+      right.generationStats?.tokensPerSecond &&
+    left.generationStats?.costUsd === right.generationStats?.costUsd &&
+    left.generationStats?.inputTokens === right.generationStats?.inputTokens &&
+    left.generationStats?.outputTokens === right.generationStats?.outputTokens &&
+    left.generationStats?.totalTokens === right.generationStats?.totalTokens &&
+    left.generationStats?.textTokens === right.generationStats?.textTokens &&
+    left.generationStats?.reasoningTokens ===
+      right.generationStats?.reasoningTokens &&
+    left.isStreaming === right.isStreaming &&
+    areMessageAttachmentsEqual(left.attachments, right.attachments)
+  )
+}
+
+const integerFormatter = new Intl.NumberFormat('en-US')
+
+function formatTokensPerSecond(tokensPerSecond: number) {
+  return `${tokensPerSecond.toFixed(2)} tok/sec`
+}
+
+function formatCostUsd(costUsd: number) {
+  return costUsd.toFixed(costUsd >= 0.01 ? 4 : 6)
+}
+
+function formatTokenCount(tokenCount: number) {
+  return `${integerFormatter.format(tokenCount)} tokens`
+}
+
+function formatTimeToFirstToken(timeToFirstTokenMs: number) {
+  return `Time-to-First: ${(timeToFirstTokenMs / 1000).toFixed(1)} sec`
+}
 
 function MessageAttachmentGrid({
   attachments,
@@ -89,6 +199,8 @@ function MessageAttachmentGrid({
                 <img
                   src={attachment.url}
                   alt={attachment.fileName}
+                  loading='lazy'
+                  decoding='async'
                   className={cn(
                     'w-full object-cover transition-transform duration-300 group-hover/attachment:scale-[1.03]',
                     imageAttachments.length === 1 ? 'max-h-104' : 'h-44',
@@ -146,7 +258,7 @@ function MessageAttachmentGrid({
   )
 }
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   driveStream = false,
   streamUrl,
@@ -185,6 +297,9 @@ export default function MessageBubble({
     string | null
   >(null)
   const [fileInputKey, setFileInputKey] = useState(0)
+  const reportedStreamStatusRef = useRef<
+    ChatMessage['streamStatus'] | undefined
+  >(undefined)
   const liveStreamId =
     message.streamId &&
     (driveStream ||
@@ -208,10 +323,17 @@ export default function MessageBubble({
     liveStreamId && liveStream.text.length > 0
       ? liveStream.text
       : message.content
+  const reasoningText =
+    (liveStreamId ? liveStream.reasoningText : undefined)?.trim() ??
+    message.reasoningText?.trim()
   const isStreaming =
     !isUser && (streamStatus === 'pending' || streamStatus === 'streaming')
   const hasStreamError =
     !isUser && (streamStatus === 'error' || streamStatus === 'timeout')
+  const tokenCount =
+    message.generationStats?.textTokens ??
+    message.generationStats?.outputTokens ??
+    message.generationStats?.totalTokens
   const dialogAttachments = useMemo(
     () =>
       message.attachments.map((attachment) => ({
@@ -224,17 +346,31 @@ export default function MessageBubble({
       })),
     [message.attachments],
   )
+  const [isReasoningOpen, setIsReasoningOpen] = useState(false)
+
+  useEffect(() => {
+    reportedStreamStatusRef.current = undefined
+  }, [message.id, message.streamId])
+
+  useEffect(() => {
+    setIsReasoningOpen(false)
+  }, [message.id])
 
   useEffect(() => {
     if (!message.streamId || !streamStatus) {
       return
     }
 
+    if (reportedStreamStatusRef.current === streamStatus) {
+      return
+    }
+
+    reportedStreamStatusRef.current = streamStatus
     onStreamStatusChange?.(streamStatus)
   }, [message.streamId, onStreamStatusChange, streamStatus])
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(displayContent)
+    await navigator.clipboard.writeText(displayContent || reasoningText || '')
     toast.success('Message copied')
   }
 
@@ -493,6 +629,41 @@ export default function MessageBubble({
                 />
               </div>
             ) : null}
+            {reasoningText ? (
+              <div className='mb-4 w-full max-w-[min(56rem,86vw)]'>
+                <button
+                  type='button'
+                  onClick={() => setIsReasoningOpen((open) => !open)}
+                  className='inline-flex items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground'
+                  aria-expanded={isReasoningOpen}
+                >
+                  <Brain className='size-4 text-foreground/75' />
+                  <span>Reasoning</span>
+                  <ChevronDown
+                    className={cn(
+                      'size-4 text-muted-foreground transition-transform duration-200',
+                      isReasoningOpen && 'rotate-180',
+                    )}
+                  />
+                </button>
+                <div
+                  className={cn(
+                    'grid transition-all duration-200 ease-out',
+                    isReasoningOpen
+                      ? 'mt-3 grid-rows-[1fr] opacity-100'
+                      : 'mt-1 grid-rows-[0fr] opacity-80',
+                  )}
+                >
+                  <div className='overflow-hidden'>
+                    <div className='rounded-[26px] border border-border/50 bg-card/55 px-6 py-5 shadow-sm backdrop-blur-sm'>
+                      <div className='whitespace-pre-wrap break-words text-[15px] leading-8 text-muted-foreground/95'>
+                        {reasoningText}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {displayContent ? (
               <>
                 <MarkdownRenderer content={displayContent} />
@@ -512,15 +683,15 @@ export default function MessageBubble({
                     'Reply failed to stream. Retry to generate again.'}
                 </span>
               </div>
-            ) : (
+            ) : !reasoningText ? (
               <div className='inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs text-muted-foreground'>
                 <span className='size-1.5 animate-pulse rounded-full bg-primary/70' />
                 <span>Thinking</span>
               </div>
-            )}
-            {displayContent && !isStreaming ? (
-              <div className='mt-3 min-h-6 translate-y-0 overflow-hidden text-[12px] text-muted-foreground/80 opacity-0 transition-opacity duration-200 pointer-events-none group-hover/message:opacity-100 group-hover/message:pointer-events-auto'>
-                <div className='flex items-center gap-3 whitespace-nowrap'>
+            ) : null}
+            {(displayContent || reasoningText) && !isStreaming ? (
+              <div className='mt-3 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-2 overflow-hidden text-[12px] text-muted-foreground/80'>
+                <div className='pointer-events-none flex items-center gap-3 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/message:pointer-events-auto group-hover/message:opacity-100'>
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -555,10 +726,44 @@ export default function MessageBubble({
                       Retry response
                     </TooltipContent>
                   </Tooltip>
+                </div>
+                <div className='pointer-events-none flex flex-wrap items-center gap-x-3 gap-y-2 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/message:pointer-events-auto group-hover/message:opacity-100'>
                   <div className='inline-flex items-center gap-1.5 font-medium text-foreground/90'>
                     <Sparkles className='size-3.5 text-primary/80' />
                     <span>{modelLabel}</span>
                   </div>
+                  {message.generationStats?.costUsd != null ? (
+                    <div className='inline-flex items-center gap-1.5'>
+                      <span className='text-muted-foreground/70'>$</span>
+                      <span>{formatCostUsd(message.generationStats.costUsd)}</span>
+                    </div>
+                  ) : null}
+                  {message.generationStats?.tokensPerSecond != null ? (
+                    <div className='inline-flex items-center gap-1.5'>
+                      <Zap className='size-3.5 text-muted-foreground/70' />
+                      <span>
+                        {formatTokensPerSecond(
+                          message.generationStats.tokensPerSecond,
+                        )}
+                      </span>
+                    </div>
+                  ) : null}
+                  {tokenCount != null ? (
+                    <div className='inline-flex items-center gap-1.5'>
+                      <Cpu className='size-3.5 text-muted-foreground/70' />
+                      <span>{formatTokenCount(tokenCount)}</span>
+                    </div>
+                  ) : null}
+                  {message.generationStats?.timeToFirstTokenMs != null ? (
+                    <div className='inline-flex items-center gap-1.5'>
+                      <Clock3 className='size-3.5 text-muted-foreground/70' />
+                      <span>
+                        {formatTimeToFirstToken(
+                          message.generationStats.timeToFirstTokenMs,
+                        )}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -574,3 +779,33 @@ export default function MessageBubble({
     </div>
   )
 }
+
+function areMessageBubblePropsEqual(
+  previousProps: Readonly<Parameters<typeof MessageBubble>[0]>,
+  nextProps: Readonly<Parameters<typeof MessageBubble>[0]>,
+) {
+  if (
+    !areMessagesEqual(previousProps.message, nextProps.message) ||
+    previousProps.driveStream !== nextProps.driveStream ||
+    previousProps.streamUrl.href !== nextProps.streamUrl.href ||
+    previousProps.isEditing !== nextProps.isEditing ||
+    previousProps.editingValue !== nextProps.editingValue ||
+    previousProps.editingModel?.id !== nextProps.editingModel?.id
+  ) {
+    return false
+  }
+
+  if (
+    previousProps.isEditing &&
+    !areComposerAttachmentsEqual(
+      previousProps.editingAttachments ?? [],
+      nextProps.editingAttachments ?? [],
+    )
+  ) {
+    return false
+  }
+
+  return true
+}
+
+export default memo(MessageBubble, areMessageBubblePropsEqual)

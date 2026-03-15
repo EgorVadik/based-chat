@@ -22,6 +22,21 @@ import ModelSelector from "./model-selector";
 const MIN_TEXTAREA_HEIGHT = 96;
 const MAX_TEXTAREA_HEIGHT = 240;
 
+function resizeTextarea(textarea: HTMLTextAreaElement | null) {
+  if (!textarea) {
+    return;
+  }
+
+  textarea.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+  const nextHeight = Math.min(
+    Math.max(textarea.scrollHeight, MIN_TEXTAREA_HEIGHT),
+    MAX_TEXTAREA_HEIGHT,
+  );
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY =
+    textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+}
+
 function revokeDraftAttachments(attachments: DraftAttachment[]) {
   for (const attachment of attachments) {
     revokeComposerAttachmentPreview(attachment);
@@ -88,17 +103,7 @@ export default function ChatInput({
   }, []);
 
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    textarea.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
-    const nextHeight = Math.min(
-      Math.max(textarea.scrollHeight, MIN_TEXTAREA_HEIGHT),
-      MAX_TEXTAREA_HEIGHT,
-    );
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY =
-      textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+    resizeTextarea(textareaRef.current);
   }, [currentValue]);
 
   const setValue = useCallback(
@@ -130,7 +135,7 @@ export default function ChatInput({
   }, [clearAttachments, isSubmitting, resetKey]);
 
   const addAttachmentFiles = useCallback((files: File[]) => {
-    const result = prepareDraftAttachments(attachments, files);
+    const result = prepareDraftAttachments(attachmentsRef.current, files);
 
     if (result.blockedCount > 0) {
       toast.error("Compressed files like zip, rar, or archive bundles are not allowed.");
@@ -148,7 +153,7 @@ export default function ChatInput({
       ...currentAttachments,
       ...result.attachments,
     ]);
-  }, [attachments]);
+  }, []);
 
   const handleSend = useCallback(async () => {
     if (disabled || isSubmitting || !canSend) return;
@@ -170,10 +175,7 @@ export default function ChatInput({
       setValue("");
       clearAttachments();
       setUploadProgressById({});
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
-        textareaRef.current.style.overflowY = "hidden";
-      }
+      resizeTextarea(textareaRef.current);
     } catch (error) {
       setUploadProgressById({});
       toast.error(
@@ -204,16 +206,7 @@ export default function ChatInput({
   );
 
   const handleInput = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
-    const nextHeight = Math.min(
-      Math.max(textarea.scrollHeight, MIN_TEXTAREA_HEIGHT),
-      MAX_TEXTAREA_HEIGHT,
-    );
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY =
-      textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+    resizeTextarea(textareaRef.current);
   }, []);
 
   const removeAttachment = useCallback((attachmentId: string) => {

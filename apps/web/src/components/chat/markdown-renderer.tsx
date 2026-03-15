@@ -9,7 +9,37 @@ import {
 } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { codeToHtml } from "shiki";
+
+const SHIKI_THEME = "vesper";
+const highlightedHtmlCache = new Map<string, string>();
+let shikiModulePromise: Promise<typeof import("shiki")> | null = null;
+
+async function highlightCode(code: string, language: string) {
+  const cacheKey = `${language}\u0000${code}`;
+  const cachedHtml = highlightedHtmlCache.get(cacheKey);
+  if (cachedHtml) {
+    return cachedHtml;
+  }
+
+  shikiModulePromise ??= import("shiki");
+  const { codeToHtml } = await shikiModulePromise;
+
+  let highlightedHtml: string;
+  try {
+    highlightedHtml = await codeToHtml(code, {
+      lang: language,
+      theme: SHIKI_THEME,
+    });
+  } catch {
+    highlightedHtml = await codeToHtml(code, {
+      lang: "text",
+      theme: SHIKI_THEME,
+    });
+  }
+
+  highlightedHtmlCache.set(cacheKey, highlightedHtml);
+  return highlightedHtml;
+}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -51,23 +81,14 @@ function CodeBlock({
 
   useEffect(() => {
     let cancelled = false;
-    codeToHtml(code, {
-      lang: language,
-      theme: "vesper",
-    })
+    void highlightCode(code, language)
       .then((html) => {
-        if (!cancelled) setHighlightedHtml(html);
-      })
-      .catch(() => {
-        // Fallback: if the language isn't supported, try plaintext
         if (!cancelled) {
-          codeToHtml(code, { lang: "text", theme: "vesper" })
-            .then((html) => {
-              if (!cancelled) setHighlightedHtml(html);
-            })
-            .catch(() => {});
+          setHighlightedHtml(html);
         }
-      });
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
