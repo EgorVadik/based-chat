@@ -20,7 +20,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@based-chat/ui/components/dropdown-menu'
-import { Avatar, AvatarFallback } from '@based-chat/ui/components/avatar'
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+} from '@based-chat/ui/components/avatar'
 import { cn } from '@based-chat/ui/lib/utils'
 import {
   MessageSquarePlus,
@@ -85,6 +89,7 @@ export default function AppSidebar({
   user: {
     name?: string | null
     email?: string | null
+    image?: string | null
   }
 }) {
   const router = useRouter()
@@ -234,6 +239,7 @@ export default function AppSidebar({
                   <AvatarFallback className='bg-primary/15 text-primary text-[10px] font-semibold'>
                     {initials}
                   </AvatarFallback>
+                  <AvatarImage src={user.image || undefined} />
                 </Avatar>
                 <div className='flex-1 min-w-0'>
                   <p className='text-xs font-medium truncate'>{displayName}</p>
