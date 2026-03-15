@@ -20,7 +20,11 @@ import {
   type QueryCtx,
 } from './_generated/server'
 import { authComponent } from './auth'
-import { getOpenRouterModelId, toModelMessages } from './llm'
+import {
+  buildSystemPrompt,
+  getOpenRouterModelId,
+  toModelMessages,
+} from './llm'
 
 const attachmentValidator = v.object({
   kind: v.union(v.literal('image'), v.literal('file')),
@@ -51,7 +55,7 @@ type ResolvedModelAttachment = {
   kind: 'image' | 'file'
   fileName: string
   contentType: string
-  dataUrl: string
+  url: string
 }
 type GenerationStats = {
   timeToFirstTokenMs?: number
@@ -62,6 +66,12 @@ type GenerationStats = {
   totalTokens?: number
   textTokens?: number
   reasoningTokens?: number
+}
+type UserProfilePromptContext = {
+  preferredName?: string
+  role?: string
+  traits: string[]
+  bio?: string
 }
 
 const persistentTextStreaming = new PersistentTextStreaming(
@@ -113,20 +123,6 @@ async function resolveAttachments(
   )
 }
 
-function encodeBase64(bytes: Uint8Array) {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64')
-  }
-
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
-  }
-
-  return btoa(binary)
-}
-
 async function resolveModelAttachments(
   ctx: ActionCtx,
   attachments: StoredAttachment[] | undefined,
@@ -138,22 +134,17 @@ async function resolveModelAttachments(
   return (
     await Promise.all(
       attachments.map(async (attachment) => {
-        const blob = await ctx.storage.get(attachment.storageId)
-        if (!blob) {
+        const url = await ctx.storage.getUrl(attachment.storageId)
+        if (!url) {
           return null
         }
-
-        const contentType =
-          attachment.contentType || blob.type || 'application/octet-stream'
-        const base64Data = encodeBase64(
-          new Uint8Array(await blob.arrayBuffer()),
-        )
 
         return {
           kind: attachment.kind,
           fileName: attachment.fileName,
-          contentType,
-          dataUrl: `data:${contentType};base64,${base64Data}`,
+          contentType:
+            attachment.contentType || 'application/octet-stream',
+          url,
         }
       }),
     )
@@ -475,6 +466,26 @@ async function getAuthorizedThread(
   return { thread, user }
 }
 
+async function getUserProfilePromptContext(
+  ctx: QueryCtx | MutationCtx,
+  user: {
+    _id: string
+    name?: string | null
+  },
+): Promise<UserProfilePromptContext> {
+  const metadata = await ctx.db
+    .query('userMetadata')
+    .withIndex('by_userId', (q) => q.eq('userId', user._id))
+    .unique()
+
+  return {
+    preferredName: metadata?.name ?? user.name ?? undefined,
+    role: metadata?.role ?? undefined,
+    traits: metadata?.traits ?? [],
+    bio: metadata?.bio ?? undefined,
+  }
+}
+
 async function getMessageByStreamId(
   ctx: QueryCtx | MutationCtx,
   streamId: string,
@@ -560,6 +571,9 @@ export const getStreamGenerationContext = internalQuery({
 
     return {
       modelId: targetMessage.modelId,
+      systemPrompt: buildSystemPrompt(
+        await getUserProfilePromptContext(ctx, user),
+      ),
       conversationMessages: await Promise.all(
         threadMessages.slice(0, targetMessageIndex).map(async (message) => ({
           role: message.role,
@@ -1183,6 +1197,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
 
   let generationContext: {
     modelId: string
+    systemPrompt: string
     conversationMessages: {
       role: 'user' | 'system'
       content: string
@@ -1346,6 +1361,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       try {
         const result = streamText({
           model: openrouter(modelId),
+          system: generationContext.systemPrompt,
           messages: conversationMessages,
           abortSignal: generationAbortController.signal,
           onError({ error }) {
@@ -1602,5 +1618,44 @@ export const deleteManyAttachments = mutation({
     }
 
     return { deletedCount }
+  },
+})
+
+export const getUsageStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.safeGetAuthUser(ctx)
+    if (!user) {
+      return null
+    }
+
+    const messages = await ctx.db
+      .query('messages')
+      .withIndex('by_userId', (q) => q.eq('userId', user._id))
+      .collect()
+
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalTokens = 0
+    let totalCostUsd = 0
+    let messageCount = 0
+
+    for (const msg of messages) {
+      if (msg.generationStats) {
+        totalInputTokens += msg.generationStats.inputTokens ?? 0
+        totalOutputTokens += msg.generationStats.outputTokens ?? 0
+        totalTokens += msg.generationStats.totalTokens ?? 0
+        totalCostUsd += msg.generationStats.costUsd ?? 0
+        messageCount++
+      }
+    }
+
+    return {
+      totalInputTokens,
+      totalOutputTokens,
+      totalTokens,
+      totalCostUsd,
+      messageCount,
+    }
   },
 })

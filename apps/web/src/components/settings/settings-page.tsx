@@ -1,3 +1,4 @@
+import { api } from '@based-chat/backend/convex/_generated/api'
 import {
   Avatar,
   AvatarFallback,
@@ -5,6 +6,7 @@ import {
 } from '@based-chat/ui/components/avatar'
 import { cn } from '@based-chat/ui/lib/utils'
 import { useRouter } from '@tanstack/react-router'
+import { useQuery } from 'convex/react'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -35,6 +37,7 @@ export default function SettingsPage({
   onTabChange: (tab: SettingsTabId) => void
 }) {
   const router = useRouter()
+  const usageStats = useQuery(api.messages.getUsageStats, {})
 
   const displayName = user.name?.trim() || user.email?.split('@')[0] || 'User'
   const displayEmail = user.email || 'No email'
@@ -104,51 +107,51 @@ export default function SettingsPage({
               {displayEmail}
             </p>
 
-            {/* Keyboard shortcuts */}
+            {/* Usage stats */}
             <div className='mt-8 w-full rounded-xl border border-border/50 bg-card/30 p-4 space-y-3'>
-              <h3 className='text-xs font-medium'>Keyboard Shortcuts</h3>
+              <h3 className='text-xs font-medium'>Usage</h3>
               <div className='space-y-2'>
                 <div className='flex items-center justify-between'>
                   <span className='text-[11px] text-muted-foreground'>
-                    Search
+                    Total Tokens
                   </span>
-                  <div className='flex items-center gap-0.5'>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      ⌘
-                    </kbd>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      K
-                    </kbd>
-                  </div>
+                  <span className='text-[11px] font-mono text-foreground'>
+                    {usageStats?.totalTokens.toLocaleString() ?? '—'}
+                  </span>
                 </div>
                 <div className='flex items-center justify-between'>
                   <span className='text-[11px] text-muted-foreground'>
-                    New Chat
+                    Input Tokens
                   </span>
-                  <div className='flex items-center gap-0.5'>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      ⌘
-                    </kbd>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      ⇧
-                    </kbd>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      O
-                    </kbd>
-                  </div>
+                  <span className='text-[11px] font-mono text-foreground'>
+                    {usageStats?.totalInputTokens.toLocaleString() ?? '—'}
+                  </span>
                 </div>
                 <div className='flex items-center justify-between'>
                   <span className='text-[11px] text-muted-foreground'>
-                    Settings
+                    Output Tokens
                   </span>
-                  <div className='flex items-center gap-0.5'>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      ⌘
-                    </kbd>
-                    <kbd className='flex size-5 items-center justify-center rounded border border-border/60 bg-muted/40 text-[9px] font-mono text-muted-foreground'>
-                      ,
-                    </kbd>
-                  </div>
+                  <span className='text-[11px] font-mono text-foreground'>
+                    {usageStats?.totalOutputTokens.toLocaleString() ?? '—'}
+                  </span>
+                </div>
+                <div className='flex items-center justify-between'>
+                  <span className='text-[11px] text-muted-foreground'>
+                    Total Cost
+                  </span>
+                  <span className='text-[11px] font-mono text-foreground'>
+                    {usageStats
+                      ? `$${usageStats.totalCostUsd.toFixed(4)}`
+                      : '—'}
+                  </span>
+                </div>
+                <div className='flex items-center justify-between'>
+                  <span className='text-[11px] text-muted-foreground'>
+                    Messages
+                  </span>
+                  <span className='text-[11px] font-mono text-foreground'>
+                    {usageStats?.messageCount.toLocaleString() ?? '—'}
+                  </span>
                 </div>
               </div>
             </div>

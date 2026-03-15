@@ -10,7 +10,7 @@ import { toast } from "sonner";
 
 type ThreadId = Id<"threads">;
 
-const THREAD_PAGE_SIZE = 25;
+const THREAD_PAGE_SIZE = 10;
 
 function formatRelativeDate(timestamp: number) {
   const diff = Math.max(0, Date.now() - timestamp);
@@ -42,6 +42,8 @@ export default function ThreadHistoryTab() {
   const [selectedIds, setSelectedIds] = useState<Set<ThreadId>>(new Set());
   const [sortAsc, setSortAsc] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pendingPage, setPendingPage] = useState<number | null>(null);
 
   const threadIdSet = useMemo(() => new Set(threads.map((thread) => thread._id)), [threads]);
 
@@ -57,18 +59,51 @@ export default function ThreadHistoryTab() {
     });
   }, [threadIdSet]);
 
-  const allSelected =
-    threads.length > 0 && selectedIds.size === threads.length;
-
   const sortedThreads = useMemo(() => {
     return [...threads].sort((a, b) =>
       sortAsc ? a.updatedAt - b.updatedAt : b.updatedAt - a.updatedAt,
     );
   }, [threads, sortAsc]);
 
+  const totalPages =
+    sortedThreads.length > 0
+      ? Math.ceil(sortedThreads.length / THREAD_PAGE_SIZE)
+      : 1;
+  const pageStart = currentPage * THREAD_PAGE_SIZE;
+  const visibleThreads = sortedThreads.slice(
+    pageStart,
+    pageStart + THREAD_PAGE_SIZE,
+  );
+  const allSelected =
+    visibleThreads.length > 0 &&
+    visibleThreads.every((thread) => selectedIds.has(thread._id));
+
   const isLoadingFirstPage = status === "LoadingFirstPage";
   const isLoadingMore = status === "LoadingMore";
   const canLoadMore = status === "CanLoadMore";
+  const hasLoadedNextPage = currentPage < totalPages - 1;
+  const canGoPrev = currentPage > 0;
+  const canGoNext = hasLoadedNextPage || canLoadMore;
+
+  useEffect(() => {
+    setCurrentPage((currentValue) => Math.min(currentValue, totalPages - 1));
+  }, [totalPages]);
+
+  useEffect(() => {
+    if (pendingPage === null) {
+      return;
+    }
+
+    if (totalPages > pendingPage) {
+      setCurrentPage(pendingPage);
+      setPendingPage(null);
+      return;
+    }
+
+    if (!isLoadingMore && !canLoadMore) {
+      setPendingPage(null);
+    }
+  }, [canLoadMore, isLoadingMore, pendingPage, totalPages]);
 
   const toggleSelect = (id: ThreadId) => {
     setSelectedIds((currentSelectedIds) => {
@@ -86,11 +121,46 @@ export default function ThreadHistoryTab() {
 
   const toggleSelectAll = () => {
     if (allSelected) {
-      setSelectedIds(new Set());
+      setSelectedIds((currentSelectedIds) => {
+        const nextSelectedIds = new Set(currentSelectedIds);
+
+        for (const thread of visibleThreads) {
+          nextSelectedIds.delete(thread._id);
+        }
+
+        return nextSelectedIds;
+      });
       return;
     }
 
-    setSelectedIds(new Set(threads.map((thread) => thread._id)));
+    setSelectedIds((currentSelectedIds) => {
+      const nextSelectedIds = new Set(currentSelectedIds);
+
+      for (const thread of visibleThreads) {
+        nextSelectedIds.add(thread._id);
+      }
+
+      return nextSelectedIds;
+    });
+  };
+
+  const handlePrevPage = () => {
+    setPendingPage(null);
+    setCurrentPage((currentValue) => Math.max(0, currentValue - 1));
+  };
+
+  const handleNextPage = () => {
+    if (hasLoadedNextPage) {
+      setCurrentPage((currentValue) => currentValue + 1);
+      return;
+    }
+
+    if (!canLoadMore || isLoadingMore) {
+      return;
+    }
+
+    setPendingPage(currentPage + 1);
+    loadMore(THREAD_PAGE_SIZE);
   };
 
   const handleDelete = async (threadIds: ThreadId[]) => {
@@ -130,7 +200,7 @@ export default function ThreadHistoryTab() {
       <div>
         <h2 className="text-xl font-semibold tracking-tight">Chat History</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Review your real conversation history, load older threads, or delete
+          Review your real conversation history, browse older threads, or delete
           conversations you no longer need. Deleting a thread is permanent.
         </p>
       </div>
@@ -141,7 +211,7 @@ export default function ThreadHistoryTab() {
             checked={allSelected}
             onCheckedChange={toggleSelectAll}
             className="rounded-sm"
-            disabled={threads.length === 0 || isDeleting}
+            disabled={visibleThreads.length === 0 || isDeleting}
           />
           <span className="flex-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Title
@@ -180,7 +250,7 @@ export default function ThreadHistoryTab() {
           )}
 
           {!isLoadingFirstPage &&
-            sortedThreads.map((thread) => {
+            visibleThreads.map((thread) => {
               const isSelected = selectedIds.has(thread._id);
 
               return (
@@ -237,16 +307,26 @@ export default function ThreadHistoryTab() {
           </div>
         )}
 
-        {(canLoadMore || isLoadingMore) && (
-          <div className="border-t border-border/30 px-3 py-3">
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => loadMore(THREAD_PAGE_SIZE)}
-              disabled={isLoadingMore || isDeleting}
-            >
-              {isLoadingMore ? "Loading more..." : "Load more threads"}
-            </Button>
+        {!isLoadingFirstPage && sortedThreads.length > 0 && (
+          <div className="flex justify-end border-t border-border/30 px-3 py-3">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={handlePrevPage}
+                disabled={!canGoPrev || isDeleting || isLoadingMore}
+              >
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={handleNextPage}
+                disabled={!canGoNext || isDeleting || isLoadingMore}
+              >
+                {isLoadingMore ? "Loading..." : "Next"}
+              </Button>
+            </div>
           </div>
         )}
       </div>

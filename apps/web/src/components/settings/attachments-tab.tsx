@@ -33,6 +33,8 @@ type SettingsAttachment = {
   url: string | null;
 };
 
+const ATTACHMENTS_PAGE_SIZE = 10;
+
 function getFileIcon(contentType: string) {
   if (contentType.startsWith("image/")) return FileImage;
   if (contentType.includes("pdf")) return FileText;
@@ -86,6 +88,7 @@ export default function AttachmentsTab() {
   const [selectedIds, setSelectedIds] = useState<Set<StorageId>>(new Set());
   const [sortAsc, setSortAsc] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
 
   const attachmentIdSet = useMemo(
     () => new Set(attachments.map((attachment) => attachment.storageId)),
@@ -104,14 +107,32 @@ export default function AttachmentsTab() {
     });
   }, [attachmentIdSet]);
 
-  const allSelected =
-    attachments.length > 0 && selectedIds.size === attachments.length;
-
   const sortedAttachments = useMemo(() => {
     return [...attachments].sort((a, b) =>
       sortAsc ? a.createdAt - b.createdAt : b.createdAt - a.createdAt,
     );
   }, [attachments, sortAsc]);
+
+  const totalPages =
+    sortedAttachments.length > 0
+      ? Math.ceil(sortedAttachments.length / ATTACHMENTS_PAGE_SIZE)
+      : 1;
+  const pageStart = currentPage * ATTACHMENTS_PAGE_SIZE;
+  const visibleAttachments = sortedAttachments.slice(
+    pageStart,
+    pageStart + ATTACHMENTS_PAGE_SIZE,
+  );
+  const allSelected =
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every((attachment) =>
+      selectedIds.has(attachment.storageId),
+    );
+  const canGoPrev = currentPage > 0;
+  const canGoNext = currentPage < totalPages - 1;
+
+  useEffect(() => {
+    setCurrentPage((currentValue) => Math.min(currentValue, totalPages - 1));
+  }, [totalPages]);
 
   const toggleSelect = (id: StorageId) => {
     setSelectedIds((currentSelectedIds) => {
@@ -129,11 +150,27 @@ export default function AttachmentsTab() {
 
   const toggleSelectAll = () => {
     if (allSelected) {
-      setSelectedIds(new Set());
+      setSelectedIds((currentSelectedIds) => {
+        const nextSelectedIds = new Set(currentSelectedIds);
+
+        for (const attachment of visibleAttachments) {
+          nextSelectedIds.delete(attachment.storageId);
+        }
+
+        return nextSelectedIds;
+      });
       return;
     }
 
-    setSelectedIds(new Set(attachments.map((attachment) => attachment.storageId)));
+    setSelectedIds((currentSelectedIds) => {
+      const nextSelectedIds = new Set(currentSelectedIds);
+
+      for (const attachment of visibleAttachments) {
+        nextSelectedIds.add(attachment.storageId);
+      }
+
+      return nextSelectedIds;
+    });
   };
 
   const handleDelete = async (storageIds: StorageId[]) => {
@@ -210,7 +247,7 @@ export default function AttachmentsTab() {
               checked={allSelected}
               onCheckedChange={toggleSelectAll}
               className="rounded-sm after:hidden"
-              disabled={attachments.length === 0 || isDeleting}
+              disabled={visibleAttachments.length === 0 || isDeleting}
             />
             <span className="flex-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Name
@@ -237,7 +274,7 @@ export default function AttachmentsTab() {
             ) : null}
 
             {!isLoading &&
-              sortedAttachments.map((attachment) => {
+              visibleAttachments.map((attachment) => {
                 const Icon = getFileIcon(attachment.contentType);
                 const colorClass = getFileColor(attachment.contentType);
                 const isSelected = selectedIds.has(attachment.storageId);
@@ -318,6 +355,37 @@ export default function AttachmentsTab() {
               <p className="text-xs text-muted-foreground/50">
                 No attachments.
               </p>
+            </div>
+          ) : null}
+
+          {!isLoading && sortedAttachments.length > 0 ? (
+            <div className="flex justify-end border-t border-border/30 px-3 py-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() =>
+                    setCurrentPage((currentValue) =>
+                      Math.max(0, currentValue - 1),
+                    )
+                  }
+                  disabled={!canGoPrev || isDeleting}
+                >
+                  Prev
+                </Button>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() =>
+                    setCurrentPage((currentValue) =>
+                      Math.min(totalPages - 1, currentValue + 1),
+                    )
+                  }
+                  disabled={!canGoNext || isDeleting}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           ) : null}
         </div>

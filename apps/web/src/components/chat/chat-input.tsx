@@ -21,6 +21,18 @@ import ModelSelector from "./model-selector";
 
 const MIN_TEXTAREA_HEIGHT = 96;
 const MAX_TEXTAREA_HEIGHT = 240;
+const LARGE_PASTE_TEXT_THRESHOLD = 3000;
+
+function createPastedTextFile(text: string) {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:]/g, "-")
+    .replace(/\.\d{3}Z$/, "Z");
+
+  return new File([text], `pasted-text-${timestamp}.txt`, {
+    type: "text/plain",
+  });
+}
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -52,6 +64,7 @@ export default function ChatInput({
   onValueChange,
   disabled = false,
   isStreaming = false,
+  autoFocus = false,
   className,
   resetKey,
 }: {
@@ -67,6 +80,7 @@ export default function ChatInput({
   onValueChange?: (value: string) => void;
   disabled?: boolean;
   isStreaming?: boolean;
+  autoFocus?: boolean;
   className?: string;
   resetKey?: string;
 }) {
@@ -105,6 +119,14 @@ export default function ChatInput({
   useEffect(() => {
     resizeTextarea(textareaRef.current);
   }, [currentValue]);
+
+  useEffect(() => {
+    if (!autoFocus || disabled || isSubmitting || isStreaming) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+  }, [autoFocus, disabled, isStreaming, isSubmitting, resetKey]);
 
   const setValue = useCallback(
     (nextValue: string) => {
@@ -240,12 +262,20 @@ export default function ChatInput({
         .map((item) => item.getAsFile())
         .filter((file): file is File => file !== null);
 
-      if (pastedFiles.length === 0) {
+      if (pastedFiles.length > 0) {
+        event.preventDefault();
+        addAttachmentFiles(pastedFiles);
+        return;
+      }
+
+      const pastedText = event.clipboardData.getData("text/plain");
+      if (pastedText.length <= LARGE_PASTE_TEXT_THRESHOLD) {
         return;
       }
 
       event.preventDefault();
-      addAttachmentFiles(pastedFiles);
+      addAttachmentFiles([createPastedTextFile(pastedText)]);
+      toast.success("Large pasted text was added as a .txt attachment.");
     },
     [addAttachmentFiles],
   );

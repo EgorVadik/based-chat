@@ -209,13 +209,8 @@ export default function ChatArea({
   }, [resetEditingState, thread?._id]);
 
   useEffect(() => {
-    if (lastMessageIsStreaming) {
-      updateScrollState();
-      return;
-    }
-
     if (isAtBottomRef.current) {
-      scrollToBottom("auto");
+      scrollToBottom("smooth");
       return;
     }
 
@@ -223,7 +218,6 @@ export default function ChatArea({
   }, [
     lastMessage?.content,
     lastMessage?.id,
-    lastMessageIsStreaming,
     messages.length,
     scrollToBottom,
     updateScrollState,
@@ -311,7 +305,7 @@ export default function ChatArea({
                   type="button"
                   size="icon-sm"
                   variant="outline"
-                  onClick={() => scrollToBottom("auto")}
+                  onClick={() => scrollToBottom("smooth")}
                   className="pointer-events-auto rounded-full border-border bg-card/95 text-foreground shadow-xl backdrop-blur-sm"
                 >
                   <ArrowDown className="size-4" />
@@ -331,6 +325,7 @@ export default function ChatArea({
         onModelChange={onModelChange}
         value={draftMessage}
         onValueChange={setDraftMessage}
+        autoFocus={!thread && !isThreadPending}
         resetKey={thread?._id ?? "new-thread"}
         onSend={async (message, attachments, uploadHandlers) => {
           await onSendMessage(message, attachments, uploadHandlers);

@@ -63,5 +63,6 @@ export default defineSchema({
     updatedAt: v.optional(v.number()),
   })
     .index("by_threadId_createdAt", ["threadId", "createdAt"])
-    .index("by_streamId", ["streamId"]),
+    .index("by_streamId", ["streamId"])
+    .index("by_userId", ["userId"]),
 });
