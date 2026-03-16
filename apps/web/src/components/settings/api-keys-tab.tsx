@@ -1,20 +1,32 @@
 import { Button } from '@based-chat/ui/components/button'
 import { Input } from '@based-chat/ui/components/input'
 import { Eye, EyeOff, ExternalLink } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
+import { useLocalStorage } from '@/hooks/use-local-storage'
 import {
-  getStoredOpenRouterApiKey,
-  saveStoredOpenRouterApiKey,
+  OPENROUTER_API_KEY_STORAGE_KEY,
+  normalizeOpenRouterApiKey,
 } from '@/lib/api-key-storage'
 
 export default function ApiKeysTab() {
-  const [apiKey, setApiKey] = useState(() => getStoredOpenRouterApiKey())
+  const [savedApiKey, setSavedApiKey] = useLocalStorage(
+    OPENROUTER_API_KEY_STORAGE_KEY,
+    '',
+    {
+      parse: (rawValue) => normalizeOpenRouterApiKey(rawValue) ?? '',
+      serialize: (value) => normalizeOpenRouterApiKey(value),
+    },
+  )
+  const [apiKey, setApiKey] = useState(savedApiKey)
   const [showKey, setShowKey] = useState(false)
-  const savedApiKey = getStoredOpenRouterApiKey()
   const hasSavedApiKey = savedApiKey.length > 0
   const hasUnsavedChanges = apiKey.trim() !== savedApiKey
+
+  useEffect(() => {
+    setApiKey(savedApiKey)
+  }, [savedApiKey])
 
   return (
     <div className='space-y-8'>
@@ -91,7 +103,7 @@ export default function ApiKeysTab() {
                 size='sm'
                 variant='ghost'
                 onClick={() => {
-                  setApiKey(saveStoredOpenRouterApiKey(''))
+                  setSavedApiKey('')
                   toast.success('API key removed.')
                 }}
               >
@@ -102,7 +114,8 @@ export default function ApiKeysTab() {
               size='sm'
               disabled={!hasUnsavedChanges}
               onClick={() => {
-                const savedKey = saveStoredOpenRouterApiKey(apiKey)
+                const savedKey = normalizeOpenRouterApiKey(apiKey) ?? ''
+                setSavedApiKey(savedKey)
                 setApiKey(savedKey)
                 toast.success(
                   savedKey ? 'API key saved.' : 'API key removed.',

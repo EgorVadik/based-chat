@@ -12,9 +12,11 @@ import {
 
 import { getStoredOpenRouterApiKey } from "@/lib/api-key-storage";
 import { authClient } from "@/lib/auth-client";
+import type { ChatMessageSource } from "@/lib/chat";
 
 type PersistentBody = StreamBody & {
   errorMessage?: string;
+  sources?: ChatMessageSource[];
 };
 type StreamStatus = StreamBody["status"];
 type StreamStartResult = {
@@ -24,11 +26,59 @@ type StreamStartResult = {
 type PersistentStreamState = PersistentBody & {
   errorMessage?: string;
   reasoningText?: string;
+  sources: ChatMessageSource[];
 };
 
 const TERMINAL_STATUSES = new Set<StreamStatus>(["done", "error", "timeout"]);
 const PERSISTENCE_SETTLE_TIMEOUT_MS = 2500;
 const streamAbortControllers = new Map<StreamId, AbortController>();
+
+function mergeSources(
+  currentSources: ChatMessageSource[],
+  nextSource: ChatMessageSource,
+) {
+  const existingSourceIndex = currentSources.findIndex(
+    (source) => source.url === nextSource.url || source.id === nextSource.id,
+  );
+
+  if (existingSourceIndex === -1) {
+    return [...currentSources, nextSource];
+  }
+
+  const existingSource = currentSources[existingSourceIndex]!;
+  const mergedSource: ChatMessageSource = {
+    ...existingSource,
+    ...nextSource,
+    title: nextSource.title || existingSource.title,
+    snippet:
+      nextSource.snippet &&
+      nextSource.snippet.length >= (existingSource.snippet?.length ?? 0)
+        ? nextSource.snippet
+        : existingSource.snippet,
+    hostname: nextSource.hostname || existingSource.hostname,
+  };
+
+  if (
+    mergedSource.id === existingSource.id &&
+    mergedSource.url === existingSource.url &&
+    mergedSource.title === existingSource.title &&
+    mergedSource.snippet === existingSource.snippet &&
+    mergedSource.hostname === existingSource.hostname
+  ) {
+    return currentSources;
+  }
+
+  return currentSources.map((source, index) =>
+    index === existingSourceIndex ? mergedSource : source,
+  );
+}
+
+function mergeSourceLists(
+  persistentSources: ChatMessageSource[],
+  liveSources: ChatMessageSource[],
+) {
+  return liveSources.reduce(mergeSources, persistentSources);
+}
 
 export function abortPersistentTextStream(streamId: StreamId) {
   streamAbortControllers.get(streamId)?.abort();
@@ -48,6 +98,7 @@ export function usePersistentTextStream(
   const [streamEnded, setStreamEnded] = useState<boolean | null>(null);
   const [streamBody, setStreamBody] = useState("");
   const [streamReasoningBody, setStreamReasoningBody] = useState("");
+  const [streamSources, setStreamSources] = useState<ChatMessageSource[]>([]);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | undefined>(
     undefined,
   );
@@ -112,6 +163,7 @@ export function usePersistentTextStream(
     setStreamEnded(null);
     setStreamBody("");
     setStreamReasoningBody("");
+    setStreamSources([]);
     setStreamErrorMessage(undefined);
     setDidPersistenceStall(false);
     streamStarted.current = false;
@@ -144,6 +196,15 @@ export function usePersistentTextStream(
         if (!cancelled) {
           pendingReasoningChunkRef.current += text;
           scheduleChunkFlush();
+        }
+      },
+      onSource(source) {
+        if (!cancelled) {
+          startTransition(() => {
+            setStreamSources((currentSources) =>
+              mergeSources(currentSources, source),
+            );
+          });
         }
       },
     }).then((result) => {
@@ -184,8 +245,14 @@ export function usePersistentTextStream(
       return {
         text: "",
         status: "pending",
+        sources: [],
       };
     }
+
+    const resolvedSources = mergeSourceLists(
+      persistentBody?.sources ?? [],
+      streamSources,
+    );
 
     if (persistentBody?.errorMessage) {
       return {
@@ -193,6 +260,7 @@ export function usePersistentTextStream(
         status: "error",
         errorMessage: persistentBody.errorMessage,
         reasoningText: streamReasoningBody || undefined,
+        sources: resolvedSources,
       };
     }
 
@@ -205,6 +273,7 @@ export function usePersistentTextStream(
             ? persistentBody.errorMessage ?? streamErrorMessage
             : undefined,
         reasoningText: streamReasoningBody || undefined,
+        sources: resolvedSources,
       };
     }
 
@@ -215,6 +284,7 @@ export function usePersistentTextStream(
           status: persistentBody!.status,
           errorMessage: persistentBody?.errorMessage,
           reasoningText: streamReasoningBody || undefined,
+          sources: resolvedSources,
         };
       }
 
@@ -226,6 +296,7 @@ export function usePersistentTextStream(
           streamErrorMessage ??
           "Reply failed to stream. Retry to generate again.",
         reasoningText: streamReasoningBody || undefined,
+        sources: resolvedSources,
       };
     }
 
@@ -239,6 +310,7 @@ export function usePersistentTextStream(
               persistentBody?.errorMessage ??
               streamErrorMessage ??
               "The reply stalled before the stream could finish.",
+            sources: resolvedSources,
           };
         }
 
@@ -250,6 +322,7 @@ export function usePersistentTextStream(
               : "streaming",
           errorMessage: persistentBody?.errorMessage ?? streamErrorMessage,
           reasoningText: streamReasoningBody || undefined,
+          sources: resolvedSources,
         };
       }
 
@@ -257,15 +330,20 @@ export function usePersistentTextStream(
         text: streamBody,
         status: hasDirectStreamText ? "streaming" : "pending",
         reasoningText: streamReasoningBody || undefined,
+        sources: resolvedSources,
       };
     }
 
-    return (
-      persistentBody ?? {
-        text: "",
-        status: "pending",
-      }
-    );
+    return persistentBody
+      ? {
+          ...persistentBody,
+          sources: resolvedSources,
+        }
+      : {
+          text: "",
+          status: "pending",
+          sources: [],
+        };
   }, [
     didPersistenceStall,
     driven,
@@ -278,6 +356,7 @@ export function usePersistentTextStream(
     streamEnded,
     streamErrorMessage,
     streamId,
+    streamSources,
   ]);
 }
 
@@ -291,6 +370,10 @@ type StreamEvent =
       text: string;
     }
   | {
+      type: "source";
+      source: ChatMessageSource;
+    }
+  | {
       type: "error";
       errorMessage: string;
     };
@@ -301,6 +384,7 @@ async function startStreaming(
   handlers: {
     onTextDelta: (text: string) => void;
     onReasoningDelta: (text: string) => void;
+    onSource: (source: ChatMessageSource) => void;
   },
 ): Promise<StreamStartResult> {
   const abortController = new AbortController();
@@ -402,6 +486,11 @@ async function startStreaming(
 
       if (streamEvent.type === "reasoning-delta") {
         handlers.onReasoningDelta(streamEvent.text);
+        continue;
+      }
+
+      if (streamEvent.type === "source") {
+        handlers.onSource(streamEvent.source);
         continue;
       }
 

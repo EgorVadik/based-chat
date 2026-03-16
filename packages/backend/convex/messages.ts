@@ -23,6 +23,7 @@ import { authComponent } from './auth'
 import {
   buildSystemPrompt,
   getOpenRouterModelId,
+  getOpenRouterChatProviderOptions,
   toModelMessages,
 } from './llm'
 
@@ -42,6 +43,13 @@ const generationStatsValidator = v.object({
   totalTokens: v.optional(v.number()),
   textTokens: v.optional(v.number()),
   reasoningTokens: v.optional(v.number()),
+})
+const sourceValidator = v.object({
+  id: v.string(),
+  url: v.string(),
+  title: v.optional(v.string()),
+  snippet: v.optional(v.string()),
+  hostname: v.optional(v.string()),
 })
 
 type StoredAttachment = {
@@ -67,11 +75,19 @@ type GenerationStats = {
   textTokens?: number
   reasoningTokens?: number
 }
+type MessageSource = {
+  id: string
+  url: string
+  title?: string
+  snippet?: string
+  hostname?: string
+}
 type ImportedTemporaryMessage = {
   role: 'user' | 'system'
   modelId: string
   content: string
   reasoningText?: string
+  sources?: MessageSource[]
   attachments?: StoredAttachment[]
   errorMessage?: string
   generationStats?: GenerationStats
@@ -102,6 +118,7 @@ const importedTemporaryMessageValidator = v.object({
   modelId: v.string(),
   content: v.string(),
   reasoningText: v.optional(v.string()),
+  sources: v.optional(v.array(sourceValidator)),
   attachments: v.optional(v.array(attachmentValidator)),
   errorMessage: v.optional(v.string()),
   generationStats: v.optional(generationStatsValidator),
@@ -123,6 +140,10 @@ type StreamEvent =
       text: string
     }
   | {
+      type: 'source'
+      source: MessageSource
+    }
+  | {
       type: 'error'
       errorMessage: string
     }
@@ -142,6 +163,7 @@ const internalMessages = internal.messages as unknown as {
   markAssistantReplyCompleted: any
   markAssistantReplyError: any
   setAssistantReplyReasoning: any
+  setAssistantReplySources: any
 }
 
 async function resolveAttachments(
@@ -226,6 +248,7 @@ async function toClientMessage(
     modelId: string
     content: string
     reasoningText?: string
+    sources?: MessageSource[]
     streamId?: string
     errorMessage?: string
     attachments?: StoredAttachment[]
@@ -245,6 +268,7 @@ async function toClientMessage(
     ...message,
     content: streamBody?.text ?? message.content,
     reasoningText: message.reasoningText,
+    sources: message.sources ?? [],
     streamStatus: streamBody?.status,
     errorMessage: message.errorMessage,
     attachments: await resolveAttachments(ctx, message.attachments),
@@ -342,6 +366,56 @@ function getOpenRouter(requestApiKey?: string) {
   }
 
   return createOpenRouter({ apiKey })
+}
+
+const MIN_WEB_SEARCH_MAX_RESULTS = 1
+const MAX_WEB_SEARCH_MAX_RESULTS = 5
+
+function normalizeWebSearchMaxResults(value: number) {
+  return Math.min(
+    MAX_WEB_SEARCH_MAX_RESULTS,
+    Math.max(MIN_WEB_SEARCH_MAX_RESULTS, Math.trunc(value)),
+  )
+}
+
+function resolveWebSearchConfig(args: {
+  webSearchEnabled?: boolean
+  webSearchMaxResults?: number
+}) {
+  const webSearchEnabled = args.webSearchEnabled === true
+
+  if (!webSearchEnabled) {
+    return {
+      webSearchEnabled: false,
+      webSearchMaxResults: undefined,
+    }
+  }
+
+  const rawMaxResults = args.webSearchMaxResults
+
+  if (
+    typeof rawMaxResults !== 'number' ||
+    !Number.isFinite(rawMaxResults) ||
+    !Number.isInteger(rawMaxResults)
+  ) {
+    throw new ConvexError(
+      `Search max results must be an integer between ${MIN_WEB_SEARCH_MAX_RESULTS} and ${MAX_WEB_SEARCH_MAX_RESULTS}.`,
+    )
+  }
+
+  if (
+    rawMaxResults < MIN_WEB_SEARCH_MAX_RESULTS ||
+    rawMaxResults > MAX_WEB_SEARCH_MAX_RESULTS
+  ) {
+    throw new ConvexError(
+      `Search max results must be between ${MIN_WEB_SEARCH_MAX_RESULTS} and ${MAX_WEB_SEARCH_MAX_RESULTS}.`,
+    )
+  }
+
+  return {
+    webSearchEnabled: true,
+    webSearchMaxResults: normalizeWebSearchMaxResults(rawMaxResults),
+  }
 }
 
 function shouldPersistChunk(text: string) {
@@ -442,6 +516,117 @@ function deriveThreadTitle(content: string, attachments?: StoredAttachment[]) {
   }
 
   return 'New chat'
+}
+
+function normalizeSourceText(
+  value: unknown,
+  maximumLength: number,
+) {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return undefined
+  }
+
+  if (normalized.length <= maximumLength) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, maximumLength - 3).trimEnd()}...`
+}
+
+function resolveSourceHostname(url: string) {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '')
+    return hostname || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function toMessageSource(part: {
+  sourceType?: string
+  id?: string
+  url?: string
+  title?: string
+  providerMetadata?: unknown
+}) {
+  if (part.sourceType !== 'url' || typeof part.url !== 'string') {
+    return null
+  }
+
+  const providerMetadata =
+    part.providerMetadata != null && typeof part.providerMetadata === 'object'
+      ? (part.providerMetadata as {
+          openrouter?: {
+            content?: unknown
+          }
+        })
+      : undefined
+
+  const url = part.url.trim()
+  if (!url) {
+    return null
+  }
+
+  return {
+    id:
+      typeof part.id === 'string' && part.id.trim().length > 0
+        ? part.id
+        : url,
+    url,
+    title: normalizeSourceText(part.title, 180),
+    snippet: normalizeSourceText(
+      providerMetadata?.openrouter?.content,
+      320,
+    ),
+    hostname: resolveSourceHostname(url),
+  } satisfies MessageSource
+}
+
+function mergeMessageSources(
+  currentSources: MessageSource[],
+  nextSource: MessageSource,
+) {
+  const existingSourceIndex = currentSources.findIndex(
+    (source) =>
+      source.url === nextSource.url ||
+      source.id === nextSource.id,
+  )
+
+  if (existingSourceIndex === -1) {
+    return [...currentSources, nextSource]
+  }
+
+  const existingSource = currentSources[existingSourceIndex]!
+  const mergedSource: MessageSource = {
+    ...existingSource,
+    ...nextSource,
+    title: nextSource.title || existingSource.title,
+    snippet:
+      (nextSource.snippet &&
+      nextSource.snippet.length >= (existingSource.snippet?.length ?? 0)
+        ? nextSource.snippet
+        : existingSource.snippet),
+    hostname: nextSource.hostname || existingSource.hostname,
+  }
+
+  if (
+    mergedSource.id === existingSource.id &&
+    mergedSource.url === existingSource.url &&
+    mergedSource.title === existingSource.title &&
+    mergedSource.snippet === existingSource.snippet &&
+    mergedSource.hostname === existingSource.hostname
+  ) {
+    return currentSources
+  }
+
+  return currentSources.map((source, index) =>
+    index === existingSourceIndex ? mergedSource : source,
+  )
 }
 
 function formatThreadTitlePrompt(
@@ -617,6 +802,7 @@ export const getStreamBody = query({
     return {
       ...streamBody,
       errorMessage: message.errorMessage,
+      sources: message.sources ?? [],
     }
   },
 })
@@ -653,6 +839,8 @@ export const getStreamGenerationContext = internalQuery({
 
     return {
       modelId: targetMessage.modelId,
+      webSearchEnabled: targetMessage.webSearchEnabled ?? false,
+      webSearchMaxResults: targetMessage.webSearchMaxResults ?? 1,
       systemPrompt: buildSystemPrompt(
         await getUserProfilePromptContext(ctx, user),
       ),
@@ -926,6 +1114,7 @@ export const importTemporaryThread = mutation({
           modelId: message.modelId,
           content: message.content.trim(),
           reasoningText: message.reasoningText,
+          sources: message.sources,
           attachments:
             message.attachments && message.attachments.length > 0
               ? message.attachments
@@ -944,6 +1133,7 @@ export const importTemporaryThread = mutation({
           modelId: message.modelId,
           content: message.content.trim(),
           reasoningText: message.reasoningText,
+          sources: message.sources,
           attachments:
             message.attachments && message.attachments.length > 0
               ? message.attachments
@@ -1118,8 +1308,14 @@ export const createAssistantReply = mutation({
     userMessageId: v.id('messages'),
     userMessageUpdatedAt: v.number(),
     modelId: v.string(),
+    webSearchEnabled: v.optional(v.boolean()),
+    webSearchMaxResults: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const webSearchConfig = resolveWebSearchConfig({
+      webSearchEnabled: args.webSearchEnabled,
+      webSearchMaxResults: args.webSearchMaxResults,
+    })
     const { user } = await getAuthorizedThread(ctx, args.threadId)
 
     const messages = await ctx.db
@@ -1161,7 +1357,10 @@ export const createAssistantReply = mutation({
       modelId: args.modelId,
       content: '',
       reasoningText: undefined,
+      sources: undefined,
       streamId,
+      webSearchEnabled: webSearchConfig.webSearchEnabled,
+      webSearchMaxResults: webSearchConfig.webSearchMaxResults,
       stopRequestedAt: undefined,
       errorMessage: undefined,
       createdAt: timestamp,
@@ -1180,6 +1379,7 @@ export const createAssistantReply = mutation({
       modelId: args.modelId,
       content: '',
       reasoningText: undefined,
+      sources: [],
       streamId,
       errorMessage: undefined,
       createdAt: timestamp,
@@ -1266,6 +1466,24 @@ export const setAssistantReplyReasoning = internalMutation({
 
     await ctx.db.patch(message._id, {
       reasoningText: args.reasoningText,
+    })
+  },
+})
+
+export const setAssistantReplySources = internalMutation({
+  args: {
+    streamId: v.string(),
+    sources: v.array(sourceValidator),
+  },
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+    if (!message) {
+      return
+    }
+
+    await ctx.db.patch(message._id, {
+      sources: args.sources.length > 0 ? args.sources : undefined,
+      updatedAt: Date.now(),
     })
   },
 })
@@ -1369,6 +1587,8 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
 
   let generationContext: {
     modelId: string
+    webSearchEnabled: boolean
+    webSearchMaxResults: number
     systemPrompt: string
     conversationMessages: {
       role: 'user' | 'system'
@@ -1408,6 +1628,24 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       })),
     ),
   )
+  let webSearchConfig:
+    | {
+        webSearchEnabled: boolean
+        webSearchMaxResults?: number
+      }
+    | undefined
+  try {
+    webSearchConfig = resolveWebSearchConfig({
+      webSearchEnabled: generationContext.webSearchEnabled,
+      webSearchMaxResults: generationContext.webSearchMaxResults,
+    })
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'Invalid web search configuration.'
+    return applyCorsHeaders(new Response(errorMessage, { status: 400 }), request)
+  }
   const modelId = getOpenRouterModelId(generationContext.modelId)
   let openrouter: ReturnType<typeof createOpenRouter>
   try {
@@ -1492,6 +1730,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       const generationAbortController = new AbortController()
       let firstTextDeltaAt: number | undefined
       let reasoningText = ''
+      let sources: MessageSource[] = []
       let lastPersistedReasoningText = ''
       let costUsd: number | undefined
       let persistedText = ''
@@ -1553,6 +1792,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
           model: openrouter(modelId),
           system: generationContext.systemPrompt,
           messages: conversationMessages,
+          providerOptions: getOpenRouterChatProviderOptions(webSearchConfig),
           abortSignal: generationAbortController.signal,
           onError({ error }) {
             rawStreamFailureMessage = extractRawStreamErrorMessage(error)
@@ -1588,6 +1828,28 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
 
         for await (const part of result.fullStream) {
           switch (part.type) {
+            case 'source': {
+              const nextSource = toMessageSource(part)
+              if (!nextSource) {
+                break
+              }
+
+              const nextSources = mergeMessageSources(sources, nextSource)
+              if (nextSources === sources) {
+                break
+              }
+
+              sources = nextSources
+              await writeEvent({
+                type: 'source',
+                source: nextSource,
+              })
+              await ctx.runMutation(internalMessages.setAssistantReplySources, {
+                streamId,
+                sources,
+              })
+              break
+            }
             case 'reasoning-delta': {
               reasoningText += part.text
               await writeEvent({
@@ -1775,6 +2037,8 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
     modelId?: string
     messages?: unknown
     apiKey?: string
+    webSearchEnabled?: boolean
+    webSearchMaxResults?: number
   }
   const requestApiKey =
     typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0
@@ -1809,6 +2073,24 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
     internalMessages.getTemporaryStreamSystemPrompt,
     {},
   )
+  let webSearchConfig:
+    | {
+        webSearchEnabled: boolean
+        webSearchMaxResults?: number
+      }
+    | undefined
+  try {
+    webSearchConfig = resolveWebSearchConfig({
+      webSearchEnabled: payload.webSearchEnabled,
+      webSearchMaxResults: payload.webSearchMaxResults,
+    })
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'Invalid web search configuration.'
+    return applyCorsHeaders(new Response(errorMessage, { status: 400 }), request)
+  }
   const conversationMessages = toModelMessages(
     await Promise.all(
       payload.messages.map(async (message) => ({
@@ -1873,6 +2155,7 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
       const generationAbortController = new AbortController()
       let firstTextDeltaAt: number | undefined
       let reasoningText = ''
+      let sources: MessageSource[] = []
       let costUsd: number | undefined
       let totalUsage:
         | {
@@ -1899,6 +2182,7 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
           model: openrouter(modelId),
           system: systemPrompt,
           messages: conversationMessages,
+          providerOptions: getOpenRouterChatProviderOptions(webSearchConfig),
           abortSignal: generationAbortController.signal,
           onError({ error }) {
             rawStreamFailureMessage = extractRawStreamErrorMessage(error)
@@ -1908,6 +2192,24 @@ export const streamTemporaryAssistantReply = httpAction(async (ctx, request) => 
 
         for await (const part of result.fullStream) {
           switch (part.type) {
+            case 'source': {
+              const nextSource = toMessageSource(part)
+              if (!nextSource) {
+                break
+              }
+
+              const nextSources = mergeMessageSources(sources, nextSource)
+              if (nextSources === sources) {
+                break
+              }
+
+              sources = nextSources
+              await writeEvent({
+                type: 'source',
+                source: nextSource,
+              })
+              break
+            }
             case 'reasoning-delta': {
               reasoningText += part.text
               await writeEvent({

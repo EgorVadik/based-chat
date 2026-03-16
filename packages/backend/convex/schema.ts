@@ -11,6 +11,13 @@ const generationStatsValidator = v.object({
   textTokens: v.optional(v.number()),
   reasoningTokens: v.optional(v.number()),
 });
+const sourceValidator = v.object({
+  id: v.string(),
+  url: v.string(),
+  title: v.optional(v.string()),
+  snippet: v.optional(v.string()),
+  hostname: v.optional(v.string()),
+});
 
 export default defineSchema({
   userMetadata: defineTable({
@@ -44,7 +51,10 @@ export default defineSchema({
     modelId: v.string(),
     content: v.string(),
     reasoningText: v.optional(v.string()),
+    sources: v.optional(v.array(sourceValidator)),
     streamId: v.optional(v.string()),
+    webSearchEnabled: v.optional(v.boolean()),
+    webSearchMaxResults: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),
     errorMessage: v.optional(v.string()),
     attachments: v.optional(

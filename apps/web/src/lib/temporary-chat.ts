@@ -4,7 +4,11 @@ import { env } from '@based-chat/env/web'
 import type { MessageAttachment } from '@/lib/attachments'
 import { getStoredOpenRouterApiKey } from '@/lib/api-key-storage'
 import { authClient } from '@/lib/auth-client'
-import type { ChatMessage, MessageGenerationStats } from '@/lib/chat'
+import type {
+  ChatMessage,
+  ChatMessageSource,
+  MessageGenerationStats,
+} from '@/lib/chat'
 import { getModelById } from '@/lib/models'
 import type { ThreadSummary } from '@/lib/threads'
 
@@ -36,6 +40,10 @@ type TemporaryStreamEvent =
   | {
       type: 'reasoning-delta'
       text: string
+    }
+  | {
+      type: 'source'
+      source: ChatMessageSource
     }
   | {
       type: 'finish'
@@ -73,6 +81,7 @@ function rehydrateMessage(message: ChatMessage): ChatMessage {
 
   return {
     ...message,
+    sources: message.sources ?? [],
     threadId: TEMPORARY_CHAT_THREAD_ID,
     model: message.modelId ? getModelById(message.modelId) : message.model,
     streamStatus: interruptedStream ? 'error' : message.streamStatus,
@@ -169,16 +178,22 @@ export function startTemporaryChatStream({
   url,
   modelId,
   messages,
+  webSearchEnabled = false,
+  webSearchMaxResults = 1,
   onTextDelta,
   onReasoningDelta,
+  onSource,
   onFinish,
   onError,
 }: {
   url: URL
   modelId: string
   messages: TemporaryStreamMessage[]
+  webSearchEnabled?: boolean
+  webSearchMaxResults?: number
   onTextDelta: (text: string) => void
   onReasoningDelta: (text: string) => void
+  onSource?: (source: ChatMessageSource) => void
   onFinish?: (generationStats?: MessageGenerationStats) => void
   onError?: (errorMessage: string) => void
 }) {
@@ -210,6 +225,8 @@ export function startTemporaryChatStream({
           apiKey: apiKey || undefined,
           modelId,
           messages,
+          webSearchEnabled,
+          webSearchMaxResults,
         }),
       })
     } catch (error) {
@@ -267,6 +284,11 @@ export function startTemporaryChatStream({
 
         if (streamEvent.type === 'reasoning-delta') {
           onReasoningDelta(streamEvent.text)
+          continue
+        }
+
+        if (streamEvent.type === 'source') {
+          onSource?.(streamEvent.source)
           continue
         }
 

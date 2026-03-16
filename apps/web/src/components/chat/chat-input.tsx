@@ -1,10 +1,25 @@
 import { Button } from "@based-chat/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@based-chat/ui/components/dropdown-menu";
 import { Textarea } from "@based-chat/ui/components/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@based-chat/ui/components/tooltip";
 import { cn } from "@based-chat/ui/lib/utils";
-import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, Globe, Paperclip, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import type {
   AttachmentUploadHandlers,
   DraftAttachment,
@@ -14,7 +29,12 @@ import {
   prepareDraftAttachments,
   revokeComposerAttachmentPreview,
 } from "@/lib/attachments";
-import type { Model } from "@/lib/models";
+import {
+  getModelAttachmentInputAccept,
+  modelCanAcceptAttachments,
+  modelSupportsAttachment,
+  type Model,
+} from "@/lib/models";
 
 import ChatAttachmentStrip from "./chat-attachment-strip";
 import ModelSelector from "./model-selector";
@@ -22,6 +42,21 @@ import ModelSelector from "./model-selector";
 const MIN_TEXTAREA_HEIGHT = 96;
 const MAX_TEXTAREA_HEIGHT = 240;
 const LARGE_PASTE_TEXT_THRESHOLD = 3000;
+const WEB_SEARCH_ENABLED_STORAGE_KEY = "based-chat:web-search-enabled";
+const WEB_SEARCH_MAX_RESULTS_STORAGE_KEY = "based-chat:web-search-max-results";
+const MIN_WEB_SEARCH_MAX_RESULTS = 1;
+const MAX_WEB_SEARCH_MAX_RESULTS = 5;
+const WEB_SEARCH_RESULT_OPTIONS = [1, 2, 3, 4, 5] as const;
+const SEARCH_TOOLTIP_TITLE = "Enable search grounding";
+const SEARCH_TOOLTIP_COPY =
+  "Adds $0.004 per search request, plus your selected model's normal input-token pricing for the returned search content.";
+
+function normalizeWebSearchMaxResults(value: number) {
+  return Math.min(
+    MAX_WEB_SEARCH_MAX_RESULTS,
+    Math.max(MIN_WEB_SEARCH_MAX_RESULTS, Math.trunc(value)),
+  );
+}
 
 function createPastedTextFile(text: string) {
   const timestamp = new Date()
@@ -74,6 +109,10 @@ export default function ChatInput({
     message: string,
     attachments: DraftAttachment[],
     uploadHandlers?: AttachmentUploadHandlers,
+    options?: {
+      webSearchEnabled?: boolean;
+      webSearchMaxResults?: number;
+    },
   ) => void | Promise<void>;
   onAbort?: () => void;
   value?: string;
@@ -87,6 +126,23 @@ export default function ChatInput({
   const [internalValue, setInternalValue] = useState("");
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isWebSearchEnabled, setIsWebSearchEnabled] = useLocalStorage(
+    WEB_SEARCH_ENABLED_STORAGE_KEY,
+    false,
+  );
+  const [webSearchMaxResults, setWebSearchMaxResults] = useLocalStorage(
+    WEB_SEARCH_MAX_RESULTS_STORAGE_KEY,
+    MIN_WEB_SEARCH_MAX_RESULTS,
+    {
+      parse: (rawValue) => {
+        const parsedValue = Number.parseInt(rawValue, 10);
+        return Number.isFinite(parsedValue)
+          ? normalizeWebSearchMaxResults(parsedValue)
+          : MIN_WEB_SEARCH_MAX_RESULTS;
+      },
+      serialize: (value) => String(normalizeWebSearchMaxResults(value)),
+    },
+  );
   const [uploadProgressById, setUploadProgressById] = useState<
     Record<string, number>
   >({});
@@ -95,6 +151,8 @@ export default function ChatInput({
   const attachmentsRef = useRef<DraftAttachment[]>([]);
   const currentValue = value ?? internalValue;
   const canSend = currentValue.trim().length > 0 || attachments.length > 0;
+  const canAttachToCurrentModel = modelCanAcceptAttachments(model);
+  const attachmentInputAccept = getModelAttachmentInputAccept(model);
   const overallUploadProgress =
     attachments.length > 0
       ? Math.round(
@@ -171,11 +229,35 @@ export default function ChatInput({
       return;
     }
 
+    const supportedAttachments = result.attachments.filter((attachment) =>
+      modelSupportsAttachment(model, attachment),
+    );
+    const blockedImageAttachments = result.attachments.filter(
+      (attachment) =>
+        attachment.kind === "image" && !modelSupportsAttachment(model, attachment),
+    ).length;
+    const blockedFileAttachments = result.attachments.filter(
+      (attachment) =>
+        attachment.kind === "file" && !modelSupportsAttachment(model, attachment),
+    ).length;
+
+    if (blockedImageAttachments > 0) {
+      toast.error("This model doesn't support image attachments.");
+    }
+
+    if (blockedFileAttachments > 0) {
+      toast.error("This model doesn't support file attachments.");
+    }
+
+    if (supportedAttachments.length === 0) {
+      return;
+    }
+
     setAttachments((currentAttachments) => [
       ...currentAttachments,
-      ...result.attachments,
+      ...supportedAttachments,
     ]);
-  }, []);
+  }, [model]);
 
   const handleSend = useCallback(async () => {
     if (disabled || isSubmitting || !canSend) return;
@@ -193,6 +275,9 @@ export default function ChatInput({
             [attachmentId]: progress,
           }));
         },
+      }, {
+        webSearchEnabled: isWebSearchEnabled,
+        webSearchMaxResults,
       });
       setValue("");
       clearAttachments();
@@ -212,6 +297,8 @@ export default function ChatInput({
     clearAttachments,
     currentValue,
     disabled,
+    isWebSearchEnabled,
+    webSearchMaxResults,
     isSubmitting,
     onSend,
     setValue,
@@ -264,6 +351,10 @@ export default function ChatInput({
 
       if (pastedFiles.length > 0) {
         event.preventDefault();
+        if (!canAttachToCurrentModel) {
+          toast.error("This model can't accept attachments.");
+          return;
+        }
         addAttachmentFiles(pastedFiles);
         return;
       }
@@ -273,11 +364,15 @@ export default function ChatInput({
         return;
       }
 
+      if (!model.capabilities.includes("pdf")) {
+        return;
+      }
+
       event.preventDefault();
       addAttachmentFiles([createPastedTextFile(pastedText)]);
       toast.success("Large pasted text was added as a .txt attachment.");
     },
-    [addAttachmentFiles],
+    [addAttachmentFiles, canAttachToCurrentModel, model.capabilities],
   );
 
   return (
@@ -288,6 +383,7 @@ export default function ChatInput({
             ref={fileInputRef}
             type="file"
             multiple
+            accept={attachmentInputAccept}
             className="hidden"
             onChange={handleFileSelection}
           />
@@ -317,54 +413,191 @@ export default function ChatInput({
               className="block min-h-[96px] w-full resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 pb-3 text-sm leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
           </div>
-          <div className="flex items-center justify-between border-t border-border/40 px-3 py-2.5">
-            <div className="flex items-center gap-2">
+          <div className="border-t border-border/40 px-3 py-2.5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="min-w-0 flex-1 sm:flex-none">
+                  <ModelSelector
+                    model={model}
+                    onModelChange={onModelChange}
+                    pendingAttachments={attachments}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  onClick={() => {
+                    if (isStreaming) {
+                      onAbort?.();
+                      return;
+                    }
+
+                    void handleSend();
+                  }}
+                  disabled={disabled || isSubmitting || (!canSend && !isStreaming)}
+                  className={cn(
+                    "shrink-0 transition-all sm:hidden",
+                    isStreaming
+                      ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      : !disabled && !isSubmitting && canSend
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {isStreaming ? (
+                    <Square className="size-3.5 fill-current" />
+                  ) : (
+                    <ArrowUp className="size-4" />
+                  )}
+                </Button>
+              </div>
+
+              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:flex-1 sm:justify-end">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-pressed={isWebSearchEnabled}
+                        className={cn(
+                          "h-9 min-w-[6.25rem] flex-1 justify-center rounded-full border px-3 text-[13px] transition-all sm:h-8 sm:min-w-0 sm:flex-none",
+                          isWebSearchEnabled
+                            ? "border-primary/40 bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)] hover:border-primary/50 hover:bg-primary/14"
+                            : "border-border/60 bg-background/35 text-muted-foreground hover:border-border hover:bg-background/55 hover:text-foreground",
+                        )}
+                        onClick={() =>
+                          setIsWebSearchEnabled((current) => !current)
+                        }
+                        disabled={isSubmitting || isStreaming}
+                      >
+                        <Globe
+                          className={cn(
+                            "size-3.5",
+                            isWebSearchEnabled && "text-primary",
+                          )}
+                        />
+                        <span>Search</span>
+                      </Button>
+                    }
+                  />
+                  <TooltipContent
+                    side="top"
+                    align="center"
+                    className="max-w-72 rounded-2xl border border-white/8 bg-zinc-950/96 px-3.5 py-3 text-zinc-100 shadow-2xl backdrop-blur-xl"
+                  >
+                    <div className="space-y-1.5">
+                      <p className="text-[13px] font-semibold text-zinc-50">
+                        {SEARCH_TOOLTIP_TITLE}
+                      </p>
+                      <p className="text-[12px] leading-relaxed text-zinc-300">
+                        {SEARCH_TOOLTIP_COPY}
+                      </p>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+                {isWebSearchEnabled ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-9 min-w-[6.75rem] flex-1 justify-center rounded-full border-border/60 bg-background/35 px-3 text-[13px] text-muted-foreground transition-all hover:border-border hover:bg-background/55 hover:text-foreground sm:h-8 sm:min-w-0 sm:flex-none"
+                          disabled={isSubmitting || isStreaming}
+                        >
+                          <span>
+                            {webSearchMaxResults}{" "}
+                            {webSearchMaxResults === 1 ? "result" : "results"}
+                          </span>
+                          <ChevronDown className="size-3.5 text-muted-foreground/70" />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent
+                      align="start"
+                      side="top"
+                      sideOffset={10}
+                      className="min-w-36 rounded-2xl border border-white/8 bg-zinc-950/96 p-1.5 text-zinc-100 shadow-2xl ring-0"
+                    >
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel className="px-2.5 pb-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                          Max results
+                        </DropdownMenuLabel>
+                        <DropdownMenuRadioGroup
+                          value={String(webSearchMaxResults)}
+                          onValueChange={(value) => {
+                            setWebSearchMaxResults(
+                              normalizeWebSearchMaxResults(
+                                Number.parseInt(value, 10),
+                              ),
+                            );
+                          }}
+                        >
+                          {WEB_SEARCH_RESULT_OPTIONS.map((option) => (
+                            <DropdownMenuRadioItem
+                              key={option}
+                              value={String(option)}
+                              className="rounded-xl px-2.5 py-2 text-[13px] text-zinc-200 focus:bg-zinc-900 focus:text-zinc-50"
+                            >
+                              {option} {option === 1 ? "result" : "results"}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 min-w-[6rem] flex-1 justify-center rounded-full border-border/60 bg-background/35 px-3 text-[13px] text-muted-foreground transition-all hover:border-border hover:bg-background/55 hover:text-foreground disabled:opacity-40 sm:h-8 sm:min-w-0 sm:flex-none"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isSubmitting || isStreaming || !canAttachToCurrentModel}
+                >
+                  <Paperclip className="size-3.5" />
+                  <span>Attach</span>
+                </Button>
+                {isSubmitting && attachments.length > 0 ? (
+                  <div className="w-full rounded-full border border-border/50 bg-muted/40 px-2.5 py-1.5 text-center text-[11px] text-muted-foreground sm:w-auto sm:py-1">
+                    {overallUploadProgress < 100
+                      ? `Uploading ${overallUploadProgress}%`
+                      : "Sending message..."}
+                  </div>
+                ) : null}
+              </div>
+
               <Button
                 type="button"
-                variant="ghost"
                 size="icon-sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isSubmitting || isStreaming}
-              >
-                <Paperclip className="size-4" />
-              </Button>
-              <ModelSelector model={model} onModelChange={onModelChange} />
-              {isSubmitting && attachments.length > 0 ? (
-                <div className="rounded-full border border-border/50 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground">
-                  {overallUploadProgress < 100
-                    ? `Uploading ${overallUploadProgress}%`
-                    : "Sending message..."}
-                </div>
-              ) : null}
-            </div>
-            <Button
-              type="button"
-              size="icon-sm"
-              onClick={() => {
-                if (isStreaming) {
-                  onAbort?.();
-                  return;
-                }
+                onClick={() => {
+                  if (isStreaming) {
+                    onAbort?.();
+                    return;
+                  }
 
-                void handleSend();
-              }}
-              disabled={disabled || isSubmitting || (!canSend && !isStreaming)}
-              className={cn(
-                "transition-all",
-                isStreaming
-                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  : !disabled && !isSubmitting && canSend
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground",
-              )}
-            >
-              {isStreaming ? (
-                <Square className="size-3.5 fill-current" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </Button>
+                  void handleSend();
+                }}
+                disabled={disabled || isSubmitting || (!canSend && !isStreaming)}
+                className={cn(
+                  "hidden shrink-0 transition-all sm:inline-flex",
+                  isStreaming
+                    ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    : !disabled && !isSubmitting && canSend
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {isStreaming ? (
+                  <Square className="size-3.5 fill-current" />
+                ) : (
+                  <ArrowUp className="size-4" />
+                )}
+              </Button>
+            </div>
           </div>
         </div>
         <p className="mt-2 text-center text-[11px] text-muted-foreground/50">

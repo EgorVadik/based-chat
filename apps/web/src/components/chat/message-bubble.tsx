@@ -14,8 +14,10 @@ import {
   Clock3,
   Copy,
   Cpu,
+  ExternalLink,
   FileCode2,
   FileText,
+  Globe,
   Pencil,
   Paperclip,
   RotateCcw,
@@ -23,7 +25,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import type { ComposerAttachment } from '@/lib/attachments'
@@ -34,8 +36,13 @@ import {
   revokeComposerAttachmentPreview,
 } from '@/lib/attachments'
 import { usePersistentTextStream } from '@/lib/persistent-text-stream'
-import type { ChatMessage } from '@/lib/chat'
-import type { Model } from '@/lib/models'
+import type { ChatMessage, ChatMessageSource } from '@/lib/chat'
+import {
+  getModelAttachmentInputAccept,
+  modelCanAcceptAttachments,
+  modelSupportsAttachment,
+  type Model,
+} from '@/lib/models'
 
 import ChatAttachmentStrip from './chat-attachment-strip'
 import ChatAttachmentDialog from './chat-attachment-dialog'
@@ -100,6 +107,30 @@ function areComposerAttachmentsEqual(
   })
 }
 
+function areMessageSourcesEqual(
+  left: ChatMessage['sources'],
+  right: ChatMessage['sources'],
+) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((source, index) => {
+    const otherSource = right[index]
+    if (!otherSource) {
+      return false
+    }
+
+    return (
+      source.id === otherSource.id &&
+      source.url === otherSource.url &&
+      source.title === otherSource.title &&
+      source.snippet === otherSource.snippet &&
+      source.hostname === otherSource.hostname
+    )
+  })
+}
+
 function areMessagesEqual(left: ChatMessage, right: ChatMessage) {
   return (
     left.id === right.id &&
@@ -107,6 +138,7 @@ function areMessagesEqual(left: ChatMessage, right: ChatMessage) {
     left.role === right.role &&
     left.content === right.content &&
     left.reasoningText === right.reasoningText &&
+    areMessageSourcesEqual(left.sources, right.sources) &&
     left.modelId === right.modelId &&
     left.model?.id === right.model?.id &&
     left.createdAt === right.createdAt &&
@@ -146,6 +178,127 @@ function formatTokenCount(tokenCount: number) {
 
 function formatTimeToFirstToken(timeToFirstTokenMs: number) {
   return `Time-to-First: ${(timeToFirstTokenMs / 1000).toFixed(1)} sec`
+}
+
+function getSourceTitle(source: ChatMessageSource) {
+  return source.title || source.hostname || formatSourceUrl(source.url)
+}
+
+function formatSourceUrl(url: string) {
+  try {
+    const parsedUrl = new URL(url)
+    const hostname = parsedUrl.hostname.replace(/^www\./, '')
+    const pathname =
+      parsedUrl.pathname === '/' ? '' : parsedUrl.pathname.replace(/\/$/, '')
+
+    return `${hostname}${pathname}${parsedUrl.search}`
+  } catch {
+    return url.replace(/^https?:\/\//, '')
+  }
+}
+
+function getSourceHostname(source: ChatMessageSource) {
+  return source.hostname || formatSourceUrl(source.url).split('/')[0] || 'web'
+}
+
+function SearchSection({
+  icon,
+  label,
+  isOpen,
+  onToggle,
+  children,
+  className,
+}: {
+  icon: ReactNode
+  label: string
+  isOpen: boolean
+  onToggle: () => void
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn('w-full max-w-full md:max-w-[min(56rem,86vw)]', className)}>
+      <button
+        type='button'
+        onClick={onToggle}
+        className='inline-flex items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground'
+        aria-expanded={isOpen}
+      >
+        {icon}
+        <span>{label}</span>
+        <ChevronDown
+          className={cn(
+            'size-4 text-muted-foreground transition-transform duration-200',
+            isOpen && 'rotate-180',
+          )}
+        />
+      </button>
+      <div
+        className={cn(
+          'grid transition-all duration-200 ease-out',
+          isOpen
+            ? 'mt-3 grid-rows-[1fr] opacity-100'
+            : 'mt-1 grid-rows-[0fr] opacity-80',
+        )}
+      >
+        <div className='overflow-hidden'>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function SearchGroundingList({
+  sources,
+}: {
+  sources: ChatMessage['sources']
+}) {
+  return (
+    <div className='rounded-[26px] border border-border/50 bg-card/55 px-5 py-5 shadow-sm backdrop-blur-sm'>
+      <div className='flex flex-col gap-3'>
+        {sources.map((source) => {
+          const sourceTitle = getSourceTitle(source)
+          const sourceHostname = getSourceHostname(source)
+
+          return (
+            <div
+              key={source.id}
+              className='rounded-[22px] border border-border/40 bg-background/25 px-4 py-4'
+            >
+              <div className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70'>
+                <span>{sourceHostname}</span>
+                <a
+                  href={source.url}
+                  target='_blank'
+                  rel='noreferrer'
+                  className='inline-flex items-center gap-1 text-foreground/75 transition-colors hover:text-foreground'
+                >
+                  <span>Open source</span>
+                  <ExternalLink className='size-3' />
+                </a>
+              </div>
+              <a
+                href={source.url}
+                target='_blank'
+                rel='noreferrer'
+                className='mt-2 block text-[15px] font-medium leading-6 text-foreground transition-colors hover:text-primary'
+              >
+                {sourceTitle}
+              </a>
+              {source.snippet ? (
+                <p className='mt-2 text-sm leading-7 text-muted-foreground/92'>
+                  {source.snippet}
+                </p>
+              ) : (
+                <p className='mt-2 text-sm leading-7 text-muted-foreground/75'>
+                  {formatSourceUrl(source.url)}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function MessageAttachmentGrid({
@@ -326,6 +479,7 @@ function MessageBubble({
   const reasoningText =
     (liveStreamId ? liveStream.reasoningText : undefined)?.trim() ??
     message.reasoningText?.trim()
+  const sources = liveStreamId ? liveStream.sources : message.sources
   const isStreaming =
     !isUser && (streamStatus === 'pending' || streamStatus === 'streaming')
   const hasStreamError =
@@ -347,6 +501,13 @@ function MessageBubble({
     [message.attachments],
   )
   const [isReasoningOpen, setIsReasoningOpen] = useState(false)
+  const [isGroundingOpen, setIsGroundingOpen] = useState(false)
+  const canAttachToEditingModel = editingModel
+    ? modelCanAcceptAttachments(editingModel)
+    : false
+  const editingAttachmentInputAccept = editingModel
+    ? getModelAttachmentInputAccept(editingModel)
+    : undefined
 
   useEffect(() => {
     reportedStreamStatusRef.current = undefined
@@ -354,6 +515,7 @@ function MessageBubble({
 
   useEffect(() => {
     setIsReasoningOpen(false)
+    setIsGroundingOpen(false)
   }, [message.id])
 
   useEffect(() => {
@@ -391,7 +553,39 @@ function MessageBubble({
       return
     }
 
-    onEditingAttachmentsChange?.([...editingAttachments, ...result.attachments])
+    const supportedAttachments = editingModel
+      ? result.attachments.filter((attachment) =>
+          modelSupportsAttachment(editingModel, attachment),
+        )
+      : []
+    const blockedImageAttachments = editingModel
+      ? result.attachments.filter(
+          (attachment) =>
+            attachment.kind === 'image' &&
+            !modelSupportsAttachment(editingModel, attachment),
+        ).length
+      : 0
+    const blockedFileAttachments = editingModel
+      ? result.attachments.filter(
+          (attachment) =>
+            attachment.kind === 'file' &&
+            !modelSupportsAttachment(editingModel, attachment),
+        ).length
+      : result.attachments.length
+
+    if (blockedImageAttachments > 0) {
+      toast.error("This model doesn't support image attachments.")
+    }
+
+    if (blockedFileAttachments > 0) {
+      toast.error("This model doesn't support file attachments.")
+    }
+
+    if (supportedAttachments.length === 0) {
+      return
+    }
+
+    onEditingAttachmentsChange?.([...editingAttachments, ...supportedAttachments])
     setFileInputKey((currentKey) => currentKey + 1)
   }
 
@@ -422,6 +616,10 @@ function MessageBubble({
     }
 
     event.preventDefault()
+    if (!canAttachToEditingModel) {
+      toast.error("This model can't accept attachments.")
+      return
+    }
     handleAddEditingFiles(pastedFiles)
   }
 
@@ -510,6 +708,7 @@ function MessageBubble({
                             type='file'
                             className='hidden'
                             multiple
+                            accept={editingAttachmentInputAccept}
                             onChange={(event) => {
                               handleAddEditingFiles(
                                 Array.from(event.target.files ?? []),
@@ -529,12 +728,14 @@ function MessageBubble({
                                 )
                                 ?.click()
                             }}
-                            className='rounded-full text-muted-foreground hover:text-foreground'
+                            disabled={!canAttachToEditingModel}
+                            className='rounded-full text-muted-foreground hover:text-foreground disabled:opacity-40'
                           >
                             <Paperclip className='size-4' />
                           </Button>
                           <ModelSelector
                             model={editingModel}
+                            pendingAttachments={editingAttachments}
                             onModelChange={(model) =>
                               onEditingModelChange?.(model)
                             }
@@ -632,39 +833,19 @@ function MessageBubble({
               </div>
             ) : null}
             {reasoningText ? (
-              <div className='mb-4 w-full max-w-full md:max-w-[min(56rem,86vw)]'>
-                <button
-                  type='button'
-                  onClick={() => setIsReasoningOpen((open) => !open)}
-                  className='inline-flex items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground'
-                  aria-expanded={isReasoningOpen}
-                >
-                  <Brain className='size-4 text-foreground/75' />
-                  <span>Reasoning</span>
-                  <ChevronDown
-                    className={cn(
-                      'size-4 text-muted-foreground transition-transform duration-200',
-                      isReasoningOpen && 'rotate-180',
-                    )}
-                  />
-                </button>
-                <div
-                  className={cn(
-                    'grid transition-all duration-200 ease-out',
-                    isReasoningOpen
-                      ? 'mt-3 grid-rows-[1fr] opacity-100'
-                      : 'mt-1 grid-rows-[0fr] opacity-80',
-                  )}
-                >
-                  <div className='overflow-hidden'>
-                    <div className='rounded-[26px] border border-border/50 bg-card/55 px-6 py-5 shadow-sm backdrop-blur-sm'>
-                      <div className='whitespace-pre-wrap break-words text-[15px] leading-8 text-muted-foreground/95'>
-                        {reasoningText}
-                      </div>
-                    </div>
+              <SearchSection
+                className='mb-4'
+                icon={<Brain className='size-4 text-foreground/75' />}
+                label='Reasoning'
+                isOpen={isReasoningOpen}
+                onToggle={() => setIsReasoningOpen((open) => !open)}
+              >
+                <div className='rounded-[26px] border border-border/50 bg-card/55 px-6 py-5 shadow-sm backdrop-blur-sm'>
+                  <div className='whitespace-pre-wrap break-words text-[15px] leading-8 text-muted-foreground/95'>
+                    {reasoningText}
                   </div>
                 </div>
-              </div>
+              </SearchSection>
             ) : null}
             {displayContent ? (
               <>
@@ -693,6 +874,17 @@ function MessageBubble({
                 <span className='size-1.5 animate-pulse rounded-full bg-primary/70' />
                 <span>Thinking</span>
               </div>
+            ) : null}
+            {sources.length > 0 ? (
+              <SearchSection
+                className='mt-5'
+                icon={<Globe className='size-4 text-foreground/75' />}
+                label='Search grounding'
+                isOpen={isGroundingOpen}
+                onToggle={() => setIsGroundingOpen((open) => !open)}
+              >
+                <SearchGroundingList sources={sources} />
+              </SearchSection>
             ) : null}
             {(displayContent || reasoningText) && !isStreaming ? (
               <div className='mt-3 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-2 overflow-hidden text-[12px] text-muted-foreground/80'>

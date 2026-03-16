@@ -26,6 +26,7 @@ import type {
 } from '@/lib/attachments'
 import AppSidebar from '@/components/chat/app-sidebar'
 import Loader from '@/components/loader'
+import { useLocalStorage } from '@/hooks/use-local-storage'
 import { getStoredOpenRouterApiKey } from '@/lib/api-key-storage'
 import { toChatMessage, type ChatMessage } from '@/lib/chat'
 import { DEFAULT_MODEL, getModelById, type Model } from '@/lib/models'
@@ -56,6 +57,7 @@ type PersistedMessagePayload = {
   role: ChatMessage['role']
   content: string
   reasoningText?: string
+  sources?: ChatMessage['sources']
   attachments?: MessageAttachment[]
   modelId: string
   streamId?: string
@@ -149,6 +151,21 @@ function buildThreadMarkdown(thread: ThreadSummary, messages: ChatMessage[]) {
       sections.push(content)
     }
 
+    if (message.sources.length > 0) {
+      sections.push(
+        '<details>',
+        '<summary>Search grounding</summary>',
+        '',
+        ...message.sources.map((source) => {
+          const sourceLabel = source.title || source.hostname || source.url
+          return source.snippet
+            ? `- **${sourceLabel}**: ${source.snippet}`
+            : `- **${sourceLabel}**: ${source.url}`
+        }),
+        '</details>',
+      )
+    }
+
     if (!content && message.attachments.length > 0) {
       sections.push(
         'Attachments:',
@@ -221,6 +238,30 @@ function areMessageAttachmentsEqual(
   })
 }
 
+function areMessageSourcesEqual(
+  left: ChatMessage['sources'],
+  right: ChatMessage['sources'],
+) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((source, index) => {
+    const otherSource = right[index]
+    if (!otherSource) {
+      return false
+    }
+
+    return (
+      source.id === otherSource.id &&
+      source.url === otherSource.url &&
+      source.title === otherSource.title &&
+      source.snippet === otherSource.snippet &&
+      source.hostname === otherSource.hostname
+    )
+  })
+}
+
 function areChatMessagesEqual(left: ChatMessage, right: ChatMessage) {
   return (
     left.id === right.id &&
@@ -228,6 +269,7 @@ function areChatMessagesEqual(left: ChatMessage, right: ChatMessage) {
     left.role === right.role &&
     left.content === right.content &&
     left.reasoningText === right.reasoningText &&
+    areMessageSourcesEqual(left.sources, right.sources) &&
     left.modelId === right.modelId &&
     left.model?.id === right.model?.id &&
     left.createdAt === right.createdAt &&
@@ -335,18 +377,14 @@ export default function ChatWorkspace({
   >(() => chatWorkspaceSnapshot.messageCache)
   const [temporaryChatState, setTemporaryChatState] =
     useState<TemporaryChatState>(loadTemporaryChatState)
-  const [selectedModel, setSelectedModel] = useState<Model>(() => {
-    if (typeof window === 'undefined') {
-      return DEFAULT_MODEL
-    }
-
-    const storedModelId = window.localStorage.getItem(
-      SELECTED_MODEL_STORAGE_KEY,
-    )
-    return (
-      (storedModelId ? getModelById(storedModelId) : undefined) ?? DEFAULT_MODEL
-    )
-  })
+  const [selectedModel, setSelectedModel] = useLocalStorage<Model>(
+    SELECTED_MODEL_STORAGE_KEY,
+    DEFAULT_MODEL,
+    {
+      parse: (storedModelId) => getModelById(storedModelId) ?? DEFAULT_MODEL,
+      serialize: (model) => model.id,
+    },
+  )
   const temporaryStreamRef = useRef<ReturnType<
     typeof startTemporaryChatStream
   > | null>(null)
@@ -381,10 +419,6 @@ export default function ChatWorkspace({
   useEffect(() => {
     persistTemporaryChatState(temporaryChatState)
   }, [temporaryChatState])
-
-  useEffect(() => {
-    window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, selectedModel.id)
-  }, [selectedModel])
 
   useEffect(() => {
     if (user !== undefined) {
@@ -851,6 +885,7 @@ export default function ChatWorkspace({
         modelId: message.modelId ?? DEFAULT_MODEL.id,
         content: message.content,
         reasoningText: message.reasoningText,
+        sources: message.sources.length > 0 ? message.sources : undefined,
         attachments:
           message.attachments.length > 0
             ? message.attachments.map((attachment) => ({
@@ -1069,11 +1104,15 @@ export default function ChatWorkspace({
       userMessageId,
       userMessageUpdatedAt,
       model,
+      webSearchEnabled = false,
+      webSearchMaxResults = 1,
     }: {
       threadId: ThreadSummary['_id']
       userMessageId: Id<'messages'>
       userMessageUpdatedAt: number
       model: Model
+      webSearchEnabled?: boolean
+      webSearchMaxResults?: number
     }) => {
       if (!ensureOpenRouterApiKey()) {
         return
@@ -1084,6 +1123,8 @@ export default function ChatWorkspace({
         userMessageId,
         userMessageUpdatedAt,
         modelId: model.id,
+        webSearchEnabled,
+        webSearchMaxResults,
       })) as PersistedMessagePayload | null
 
       if (!createdAssistantMessage) {
@@ -1096,6 +1137,7 @@ export default function ChatWorkspace({
         role: 'system',
         content: createdAssistantMessage.content,
         reasoningText: createdAssistantMessage.reasoningText,
+        sources: createdAssistantMessage.sources ?? [],
         attachments: createdAssistantMessage.attachments ?? [],
         modelId: model.id,
         model,
@@ -1120,9 +1162,13 @@ export default function ChatWorkspace({
     async ({
       model,
       conversationMessages,
+      webSearchEnabled = false,
+      webSearchMaxResults = 1,
     }: {
       model: Model
       conversationMessages: ChatMessage[]
+      webSearchEnabled?: boolean
+      webSearchMaxResults?: number
     }) => {
       if (!ensureOpenRouterApiKey()) {
         return
@@ -1135,6 +1181,7 @@ export default function ChatWorkspace({
         role: 'system',
         content: '',
         reasoningText: '',
+        sources: [],
         attachments: [],
         modelId: model.id,
         model,
@@ -1150,6 +1197,8 @@ export default function ChatWorkspace({
       const stream = startTemporaryChatStream({
         url: temporaryStreamUrl,
         modelId: model.id,
+        webSearchEnabled,
+        webSearchMaxResults,
         messages: conversationMessages.map<TemporaryStreamMessage>(
           (message) => ({
             role: message.role,
@@ -1181,6 +1230,50 @@ export default function ChatWorkspace({
                 : message.streamStatus,
             updatedAt: Date.now(),
           }))
+        },
+        onSource: (source) => {
+          patchTemporaryMessage(assistantMessageId, (message) => {
+            const existingSourceIndex = message.sources.findIndex(
+              (entry) => entry.url === source.url || entry.id === source.id,
+            )
+
+            if (existingSourceIndex === -1) {
+              return {
+                ...message,
+                sources: [...message.sources, source],
+                streamStatus:
+                  message.streamStatus === 'pending'
+                    ? 'streaming'
+                    : message.streamStatus,
+                updatedAt: Date.now(),
+              }
+            }
+
+            const existingSource = message.sources[existingSourceIndex]!
+            const mergedSource = {
+              ...existingSource,
+              ...source,
+              title: source.title || existingSource.title,
+              snippet:
+                source.snippet &&
+                source.snippet.length >= (existingSource.snippet?.length ?? 0)
+                  ? source.snippet
+                  : existingSource.snippet,
+              hostname: source.hostname || existingSource.hostname,
+            }
+
+            return {
+              ...message,
+              sources: message.sources.map((entry, index) =>
+                index === existingSourceIndex ? mergedSource : entry,
+              ),
+              streamStatus:
+                message.streamStatus === 'pending'
+                  ? 'streaming'
+                  : message.streamStatus,
+              updatedAt: Date.now(),
+            }
+          })
         },
         onFinish: (generationStats) => {
           patchTemporaryMessage(assistantMessageId, (message) => ({
@@ -1228,6 +1321,8 @@ export default function ChatWorkspace({
       uploadHandlers?: AttachmentUploadHandlers,
       options?: {
         modelOverride?: Model
+        webSearchEnabled?: boolean
+        webSearchMaxResults?: number
       },
     ) => {
       const trimmedContent = content.trim()
@@ -1242,6 +1337,8 @@ export default function ChatWorkspace({
       }
 
       const modelForMessage = options?.modelOverride ?? currentModel
+      const webSearchEnabled = options?.webSearchEnabled === true
+      const webSearchMaxResults = options?.webSearchMaxResults ?? 1
       const uploadedAttachments = await uploadAttachments(
         draftAttachments,
         uploadHandlers,
@@ -1270,6 +1367,7 @@ export default function ChatWorkspace({
           threadId: TEMPORARY_CHAT_THREAD_ID,
           role: 'user',
           content: trimmedContent,
+          sources: [],
           attachments: displayedUploadedAttachments,
           modelId: modelForMessage.id,
           model: modelForMessage,
@@ -1281,6 +1379,8 @@ export default function ChatWorkspace({
         await startTemporaryAssistantReply({
           model: modelForMessage,
           conversationMessages: [...existingThreadMessages, userMessage],
+          webSearchEnabled,
+          webSearchMaxResults,
         })
         return
       }
@@ -1339,6 +1439,7 @@ export default function ChatWorkspace({
         threadId,
         role: 'user',
         content: trimmedContent,
+        sources: createdUserMessage.sources ?? [],
         attachments:
           createdUserMessage.attachments ?? displayedUploadedAttachments,
         modelId: modelForMessage.id,
@@ -1362,6 +1463,8 @@ export default function ChatWorkspace({
         userMessageUpdatedAt:
           createdUserMessage.updatedAt ?? createdUserMessage.createdAt,
         model: modelForMessage,
+        webSearchEnabled,
+        webSearchMaxResults,
       })
 
       if (createdThread) {
@@ -1499,6 +1602,7 @@ export default function ChatWorkspace({
         threadId,
         role: 'user',
         content: editResult.updatedMessage.content,
+        sources: editResult.updatedMessage.sources ?? [],
         attachments: editResult.updatedMessage.attachments ?? attachments,
         modelId: nextModel.id,
         model: nextModel,
@@ -1768,8 +1872,8 @@ export default function ChatWorkspace({
           streamUrl={streamUrl}
           onModelChange={handleModelChange}
           onMessageStreamStatusChange={handleStreamStatusChange}
-          onSendMessage={(message, attachments, uploadHandlers) =>
-            handleSendMessage(message, attachments, uploadHandlers)
+          onSendMessage={(message, attachments, uploadHandlers, options) =>
+            handleSendMessage(message, attachments, uploadHandlers, options)
           }
           onEditMessage={handleEditMessage}
           onRetryMessage={handleRetryMessage}

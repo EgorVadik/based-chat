@@ -1,4 +1,10 @@
 import { api } from "@based-chat/backend/convex/_generated/api";
+import { Button } from "@based-chat/ui/components/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@based-chat/ui/components/tooltip";
 import { cn } from "@based-chat/ui/lib/utils";
 import { Popover } from "@base-ui/react/popover";
 import { useMutation, useQuery } from "convex/react";
@@ -6,12 +12,11 @@ import {
   Brain,
   ChevronDown,
   Eye,
+  FileText,
   ImagePlus,
   Info,
-  LayoutGrid,
   Search,
   Star,
-  Wrench,
 } from "lucide-react";
 import {
   useCallback,
@@ -23,47 +28,69 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import {
+  formatModelPricing,
   MODELS,
   PROVIDERS,
+  modelSupportsAttachments,
   type Model,
   type ModelCapability,
 } from "@/lib/models";
+import type { ComposerAttachment, DraftAttachment } from "@/lib/attachments";
 
-type ModelFilter = "all" | "favorites" | (typeof PROVIDERS)[number]["id"];
+type ModelFilter = "favorites" | (typeof PROVIDERS)[number]["id"];
 
-function getProviderColor(provider: string) {
-  switch (provider) {
-    case "Anthropic":
-      return "bg-[oklch(0.72_0.17_195)]";
-    case "OpenAI":
-      return "bg-[oklch(0.72_0.15_145)]";
-    case "Google":
-      return "bg-[oklch(0.72_0.16_60)]";
-    case "Meta":
-      return "bg-[oklch(0.65_0.15_250)]";
-    case "DeepSeek":
-      return "bg-[oklch(0.65_0.18_270)]";
-    default:
-      return "bg-muted-foreground";
+const MODEL_SELECTOR_FILTER_STORAGE_KEY = "based-chat:model-selector-filter";
+const LOBE_MONO_ICON_CDN = "https://unpkg.com/@lobehub/icons-static-png@latest/light";
+const PROVIDER_LOGOS: Record<
+  string,
+  {
+    id: string;
   }
-}
-
-function PricingBadge({ pricing }: { pricing: string }) {
-  return (
-    <span className="text-[10px] font-mono text-muted-foreground/60 tracking-tight">
-      {pricing}
-    </span>
-  );
-}
+> = {
+  Anthropic: {
+    id: "anthropic",
+  },
+  OpenAI: {
+    id: "openai",
+  },
+  Google: {
+    id: "gemini",
+  },
+  Meta: {
+    id: "meta",
+  },
+  DeepSeek: {
+    id: "deepseek",
+  },
+  xAI: {
+    id: "xai",
+  },
+  Qwen: {
+    id: "qwen",
+  },
+  Moonshot: {
+    id: "moonshot",
+  },
+  "Z.ai": {
+    id: "zhipu",
+  },
+  MiniMax: {
+    id: "minimax",
+  },
+  Stealth: {
+    id: "openrouter",
+  },
+};
 
 const CAPABILITY_CONFIG: Record<
   ModelCapability,
   { icon: typeof Eye; label: string }
 > = {
-  vision: { icon: Eye, label: "Vision" },
-  tools: { icon: Wrench, label: "Tool use" },
+  image: { icon: Eye, label: "Supports image uploads" },
   reasoning: { icon: Brain, label: "Reasoning" },
+  pdf: { icon: FileText, label: "Understands PDFs" },
   "image-gen": { icon: ImagePlus, label: "Image generation" },
 };
 
@@ -71,24 +98,129 @@ function CapabilityIcon({ capability }: { capability: ModelCapability }) {
   const config = CAPABILITY_CONFIG[capability];
   const Icon = config.icon;
   return (
-    <div
-      className="flex items-center justify-center size-5 rounded bg-muted/60 text-muted-foreground/70"
-      title={config.label}
-    >
-      <Icon className="size-3" />
-    </div>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div className="flex items-center justify-center size-5 rounded bg-muted/60 text-muted-foreground/70">
+            <Icon className="size-3" />
+          </div>
+        }
+      />
+      <TooltipContent side="top" align="center">
+        {config.label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ModelInfoTooltip({ model }: { model: Model }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div className="flex items-center justify-center size-6 rounded-md text-muted-foreground/40 transition-colors hover:text-muted-foreground">
+            <Info className="size-3.5" />
+          </div>
+        }
+      />
+      <TooltipContent
+        side="top"
+        align="center"
+        className="max-w-72 flex-col items-start gap-0 rounded-lg bg-zinc-900 px-3.5 py-3 text-zinc-100 shadow-xl ring-1 ring-white/8 *:last:bg-zinc-900"
+      >
+        <div className="flex w-full flex-col gap-2.5 text-left">
+          <div>
+            <div className="text-[13px] font-semibold text-zinc-50">{model.name}</div>
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
+              {model.description}
+            </p>
+          </div>
+
+          <div className="h-px w-full bg-zinc-700/50" />
+
+          <div className="flex items-start gap-6">
+            <div>
+              <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                Provider
+              </div>
+              <div className="mt-0.5 text-[11px] font-medium text-zinc-200">OpenRouter</div>
+            </div>
+            <div>
+              <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                Developer
+              </div>
+              <div className="mt-0.5 text-[11px] font-medium text-zinc-200">{model.provider}</div>
+            </div>
+          </div>
+
+          <div className="h-px w-full bg-zinc-700/50" />
+
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+              Pricing
+            </div>
+            <div className="mt-0.5 font-mono text-[11px] tabular-nums text-zinc-300">
+              {formatModelPricing(model.pricing)}
+            </div>
+          </div>
+
+          {model.capabilities.length > 0 && (
+            <>
+              <div className="h-px w-full bg-zinc-700/50" />
+              <div className="flex flex-wrap gap-1.5">
+                {model.capabilities.map((cap) => {
+                  const capConfig = CAPABILITY_CONFIG[cap];
+                  const CapIcon = capConfig.icon;
+                  return (
+                    <span
+                      key={cap}
+                      className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-medium text-zinc-300"
+                    >
+                      <CapIcon className="size-2.5" />
+                      {capConfig.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ProviderLogo({
+  provider,
+  className,
+}: {
+  provider: string;
+  className?: string;
+}) {
+  const logo = PROVIDER_LOGOS[provider];
+
+  if (!logo) {
+    return <div className={cn("size-5 shrink-0", className)} aria-hidden="true" />;
+  }
+
+  return (
+    <img
+      src={`${LOBE_MONO_ICON_CDN}/${logo.id}.png`}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className={cn(
+        "size-5 shrink-0 select-none object-contain invert",
+        className,
+      )}
+    />
   );
 }
 
 function ProviderIcon({ provider }: { provider: string }) {
   return (
-    <div
-      className={cn(
-        "size-5 rounded-md flex items-center justify-center text-[9px] font-bold text-white shrink-0",
-        getProviderColor(provider),
-      )}
-    >
-      {provider.charAt(0)}
+    <div className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/90">
+      <ProviderLogo provider={provider} />
     </div>
   );
 }
@@ -96,42 +228,49 @@ function ProviderIcon({ provider }: { provider: string }) {
 function ModelRow({
   model,
   isFavorite,
+  isUnfavoriteArmed,
   isFavoritePending,
   isSelected,
+  isDisabled,
   onSelect,
   onToggleFavorite,
 }: {
   model: Model;
   isFavorite: boolean;
+  isUnfavoriteArmed: boolean;
   isFavoritePending: boolean;
   isSelected: boolean;
+  isDisabled: boolean;
   onSelect: (model: Model) => void;
-  onToggleFavorite: (modelId: string) => void;
+  onToggleFavorite: (modelId: string, isFavorite: boolean) => void;
 }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors group/row",
+        "grid grid-cols-[20px_1fr_auto_auto_auto] items-center gap-x-2.5 rounded-xl px-3 py-2.5 transition-colors",
         isSelected
           ? "bg-primary/10 text-foreground"
           : "text-foreground hover:bg-accent/50",
+        isDisabled && "opacity-45 hover:bg-transparent",
       )}
     >
       <button
         type="button"
         onClick={() => onSelect(model)}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        disabled={isDisabled}
+        className="col-span-2 grid grid-cols-subgrid items-center gap-x-2.5 text-left disabled:cursor-not-allowed"
       >
         <ProviderIcon provider={model.provider} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold">{model.name}</span>
-            <PricingBadge pricing={model.pricing} />
-            {model.badge && (
-              <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wider text-primary">
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold leading-5 whitespace-nowrap">
+              {model.name}
+            </span>
+            {model.badge ? (
+              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wider text-primary">
                 {model.badge}
               </span>
-            )}
+            ) : null}
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {model.description}
@@ -145,35 +284,38 @@ function ModelRow({
         ))}
       </div>
 
-      <div className="ml-1 flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          className={cn(
-            "rounded-md p-1 transition-colors",
-            isFavorite
-              ? "text-amber-500 hover:text-amber-400"
-              : "text-muted-foreground/45 hover:text-amber-500",
-            isFavoritePending && "cursor-wait opacity-60",
-          )}
-          onClick={() => onToggleFavorite(model.id)}
-          disabled={isFavoritePending}
-          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-          title={isFavorite ? "Remove from favorites" : "Add to favorites"}
-        >
-          <Star
-            className={cn(
-              "size-3.5 transition-transform",
-              isFavorite && "fill-current",
-            )}
-          />
-        </button>
-        <button
-          type="button"
-          className="rounded-md p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:text-muted-foreground group-hover/row:opacity-100"
-          title="Model details"
-        >
-          <Info className="size-3.5" />
-        </button>
+      <ModelInfoTooltip model={model} />
+
+      <div className="flex shrink-0 items-center justify-end">
+        <Tooltip open={isFavorite && isUnfavoriteArmed}>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={cn(
+                  "cursor-pointer rounded-md p-1.5 transition-colors",
+                  isFavorite
+                    ? "text-amber-500 hover:text-amber-400"
+                    : "text-muted-foreground/45 hover:text-amber-500",
+                  isFavoritePending && "cursor-wait opacity-60",
+                )}
+                onClick={() => onToggleFavorite(model.id, isFavorite)}
+                disabled={isFavoritePending}
+                aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+              />
+            }
+          >
+            <Star
+              className={cn(
+                "size-3.5 transition-transform",
+                isFavorite && "fill-current",
+              )}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="left" align="center">
+            Click again to unfavorite
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
@@ -187,52 +329,61 @@ function ProviderSidebar({
   onSelectFilter: (filter: ModelFilter) => void;
 }) {
   return (
-    <div className="flex w-14 shrink-0 flex-col items-center gap-1 border-r border-border/50 px-1.5 py-2">
-      <button
-        type="button"
-        onClick={() => onSelectFilter("favorites")}
-        className={cn(
-          "flex h-12 w-full flex-col items-center justify-center rounded-lg transition-colors",
-          selectedFilter === "favorites"
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground/60 hover:bg-accent/50 hover:text-muted-foreground",
-        )}
-        title="Favorites"
-      >
-        <Star
-          className={cn(
-            "size-4",
-            selectedFilter === "favorites" && "fill-amber-400 text-amber-400",
-          )}
-        />
-        <span className="mt-1 text-[8px] font-medium uppercase tracking-[0.18em]">
-          Fav
-        </span>
-      </button>
-
-      {PROVIDERS.map((provider) => (
-        <button
-          key={provider.id}
-          type="button"
-          onClick={() => onSelectFilter(provider.id)}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg transition-colors",
-            selectedFilter === provider.id
-              ? "bg-accent text-foreground"
-              : "text-muted-foreground/60 hover:bg-accent/50 hover:text-muted-foreground",
-          )}
-          title={provider.name}
-        >
-          <div
-            className={cn(
-              "flex size-5 items-center justify-center rounded-md text-[9px] font-bold text-white",
-              getProviderColor(provider.id),
-            )}
+    <div className="max-h-80 w-[72px] shrink-0 overflow-y-auto border-r border-border/50 px-2 py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex min-h-full flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                onClick={() => onSelectFilter("favorites")}
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "relative size-12 rounded-xl",
+                  selectedFilter === "favorites"
+                    ? "bg-accent/70 text-foreground after:absolute after:right-[-9px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary"
+                    : "text-muted-foreground/55 hover:bg-accent/40 hover:text-muted-foreground",
+                )}
+              />
+            }
           >
-            {provider.id.charAt(0)}
-          </div>
-        </button>
-      ))}
+            <Star
+              className={cn(
+                "size-4.5",
+                selectedFilter === "favorites" && "fill-amber-400 text-amber-400",
+              )}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="left" align="center">
+            Favorites
+          </TooltipContent>
+        </Tooltip>
+
+        {PROVIDERS.map((provider) => (
+          <Tooltip key={provider.id}>
+            <TooltipTrigger
+              render={
+                <Button
+                  onClick={() => onSelectFilter(provider.id)}
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "relative size-12 rounded-xl",
+                    selectedFilter === provider.id
+                      ? "bg-accent/70 text-foreground after:absolute after:right-[-9px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary"
+                      : "text-muted-foreground/55 hover:bg-accent/40 hover:text-muted-foreground",
+                  )}
+                />
+              }
+            >
+              <ProviderLogo provider={provider.id} className="size-[18px]" />
+            </TooltipTrigger>
+            <TooltipContent side="left" align="center">
+              {provider.name}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
     </div>
   );
 }
@@ -240,13 +391,35 @@ function ProviderSidebar({
 export default function ModelSelector({
   model,
   onModelChange,
+  pendingAttachments = [],
 }: {
   model: Model;
   onModelChange: (model: Model) => void;
+  pendingAttachments?: Array<DraftAttachment | ComposerAttachment>;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [selectedFilter, setSelectedFilter] = useState<ModelFilter>("all");
+  const [selectedFilter, setSelectedFilter] = useLocalStorage<ModelFilter>(
+    MODEL_SELECTOR_FILTER_STORAGE_KEY,
+    "favorites",
+    {
+      parse: (storedFilter) => {
+        if (
+          storedFilter === "favorites" ||
+          PROVIDERS.some((provider) => provider.id === storedFilter)
+        ) {
+          return storedFilter as ModelFilter;
+        }
+
+        return "favorites";
+      },
+      serialize: (filter) => filter,
+    },
+  );
+  const [showLegacyModels, setShowLegacyModels] = useState(false);
+  const [armedUnfavoriteModelId, setArmedUnfavoriteModelId] = useState<string | null>(
+    null,
+  );
   const [optimisticFavoriteIds, setOptimisticFavoriteIds] = useState<string[] | null>(
     null,
   );
@@ -266,13 +439,24 @@ export default function ModelSelector({
   useEffect(() => {
     if (open) {
       setSearch("");
-      setSelectedFilter("all");
       const timer = setTimeout(() => {
         searchInputRef.current?.focus();
       }, 50);
       return () => clearTimeout(timer);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!armedUnfavoriteModelId) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setArmedUnfavoriteModelId(null);
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [armedUnfavoriteModelId]);
 
   const activeFavoriteIds = optimisticFavoriteIds ?? favoriteModelIds ?? [];
   const favoriteIdSet = useMemo(
@@ -294,16 +478,20 @@ export default function ModelSelector({
     });
   }, [favoriteIdSet]);
 
+  const hasSearch = deferredSearch.trim().length > 0;
+
   const filteredModels = useMemo(() => {
     let models = rankedModels;
 
-    if (selectedFilter === "favorites") {
-      models = models.filter((entry) => entry.isFavorite);
-    } else if (selectedFilter !== "all") {
-      models = models.filter((entry) => entry.model.provider === selectedFilter);
+    if (!hasSearch) {
+      if (selectedFilter === "favorites") {
+        models = models.filter((entry) => entry.isFavorite);
+      } else {
+        models = models.filter((entry) => entry.model.provider === selectedFilter);
+      }
     }
 
-    if (deferredSearch.trim()) {
+    if (hasSearch) {
       const query = deferredSearch.toLowerCase();
       models = models.filter(
         ({ model: entry }) =>
@@ -314,7 +502,35 @@ export default function ModelSelector({
     }
 
     return models;
-  }, [deferredSearch, rankedModels, selectedFilter]);
+  }, [deferredSearch, hasSearch, rankedModels, selectedFilter]);
+
+  const isProviderView = selectedFilter !== "favorites" && !hasSearch;
+
+  const primaryModels = useMemo(() => {
+    if (!isProviderView) {
+      return filteredModels;
+    }
+
+    return filteredModels.filter(({ model: entry }) => !entry.isLegacy);
+  }, [filteredModels, isProviderView]);
+
+  const legacyModels = useMemo(() => {
+    if (!isProviderView) {
+      return [];
+    }
+
+    return filteredModels.filter(({ model: entry }) => entry.isLegacy);
+  }, [filteredModels, isProviderView]);
+
+  const shouldShowLegacySection = isProviderView && legacyModels.length > 0;
+  const legacySectionOpen = shouldShowLegacySection && (showLegacyModels || hasSearch);
+
+  const visibleModels = primaryModels;
+
+  const handleSelectFilter = useCallback((filter: ModelFilter) => {
+    setSelectedFilter(filter);
+    setShowLegacyModels(false);
+  }, []);
 
   const handleSelect = useCallback(
     (selected: Model) => {
@@ -325,10 +541,17 @@ export default function ModelSelector({
   );
 
   const handleToggleFavorite = useCallback(
-    async (modelId: string) => {
+    async (modelId: string, isFavorite: boolean) => {
       if (pendingFavoriteIds.includes(modelId)) {
         return;
       }
+
+      if (isFavorite && armedUnfavoriteModelId !== modelId) {
+        setArmedUnfavoriteModelId(modelId);
+        return;
+      }
+
+      setArmedUnfavoriteModelId(null);
 
       const currentFavoriteIds = optimisticFavoriteIds ?? favoriteModelIds ?? [];
       const nextFavoriteIds = currentFavoriteIds.includes(modelId)
@@ -349,7 +572,13 @@ export default function ModelSelector({
         );
       }
     },
-    [favoriteModelIds, optimisticFavoriteIds, pendingFavoriteIds, toggleFavorite],
+    [
+      armedUnfavoriteModelId,
+      favoriteModelIds,
+      optimisticFavoriteIds,
+      pendingFavoriteIds,
+      toggleFavorite,
+    ],
   );
 
   const emptyStateMessage =
@@ -362,12 +591,7 @@ export default function ModelSelector({
       <Popover.Trigger
         render={
           <button className="group flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
-            <div
-              className={cn(
-                "size-2 rounded-full transition-colors",
-                getProviderColor(model.provider),
-              )}
-            />
+            <ProviderLogo provider={model.provider} className="size-3.5" />
             <span className="font-medium">{model.name}</span>
             <ChevronDown
               className={cn(
@@ -398,44 +622,77 @@ export default function ModelSelector({
                   className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/40 focus:outline-none"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedFilter("all")}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-medium transition-colors",
-                  selectedFilter === "all"
-                    ? "border-primary/25 bg-primary/10 text-foreground"
-                    : "border-border/60 text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                )}
-                title="Show all models"
-              >
-                <LayoutGrid className="size-3.5" />
-                <span>All models</span>
-              </button>
             </div>
 
             <div className="flex max-h-80">
               <ProviderSidebar
                 selectedFilter={selectedFilter}
-                onSelectFilter={setSelectedFilter}
+                onSelectFilter={handleSelectFilter}
               />
-              <div className="thin-scrollbar flex-1 overflow-y-auto px-1 py-1">
-                {filteredModels.length === 0 ? (
+              <div className="thin-scrollbar flex-1 overflow-y-auto px-1 py-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                {visibleModels.length === 0 && !legacyModels.length ? (
                   <div className="flex items-center justify-center px-6 py-10 text-center text-sm text-muted-foreground/60">
                     {emptyStateMessage}
                   </div>
                 ) : (
-                  filteredModels.map(({ model: entry, isFavorite }) => (
-                    <ModelRow
-                      key={entry.id}
-                      model={entry}
-                      isFavorite={isFavorite}
-                      isFavoritePending={pendingFavoriteIds.includes(entry.id)}
-                      isSelected={entry.id === model.id}
-                      onSelect={handleSelect}
-                      onToggleFavorite={handleToggleFavorite}
-                    />
-                  ))
+                  <>
+                    {visibleModels.map(({ model: entry, isFavorite }) => (
+                      <ModelRow
+                        key={entry.id}
+                        model={entry}
+                        isFavorite={isFavorite}
+                        isUnfavoriteArmed={armedUnfavoriteModelId === entry.id}
+                        isFavoritePending={pendingFavoriteIds.includes(entry.id)}
+                        isSelected={entry.id === model.id}
+                        isDisabled={
+                          pendingAttachments.length > 0 &&
+                          !modelSupportsAttachments(entry, pendingAttachments)
+                        }
+                        onSelect={handleSelect}
+                        onToggleFavorite={handleToggleFavorite}
+                      />
+                    ))}
+
+                    {shouldShowLegacySection ? (
+                      <div className="px-2 pb-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowLegacyModels((current) => !current)}
+                          className="flex w-full items-center justify-between rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                        >
+                          <span>
+                            {legacyModels.length} legacy model
+                            {legacyModels.length === 1 ? "" : "s"}
+                          </span>
+                          <ChevronDown
+                            className={cn(
+                              "size-3.5 transition-transform",
+                              legacySectionOpen && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {legacySectionOpen
+                      ? legacyModels.map(({ model: entry, isFavorite }) => (
+                          <ModelRow
+                            key={entry.id}
+                            model={entry}
+                            isFavorite={isFavorite}
+                            isUnfavoriteArmed={armedUnfavoriteModelId === entry.id}
+                            isFavoritePending={pendingFavoriteIds.includes(entry.id)}
+                            isSelected={entry.id === model.id}
+                            isDisabled={
+                              pendingAttachments.length > 0 &&
+                              !modelSupportsAttachments(entry, pendingAttachments)
+                            }
+                            onSelect={handleSelect}
+                            onToggleFavorite={handleToggleFavorite}
+                          />
+                        ))
+                      : null}
+                  </>
                 )}
               </div>
             </div>

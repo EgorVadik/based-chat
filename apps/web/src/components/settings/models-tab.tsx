@@ -13,24 +13,29 @@ import {
   Brain,
   ChevronDown,
   Eye,
+  FileText,
   Filter,
   Image,
   Search,
   Star,
-  Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { MODELS, type Model, type ModelCapability } from "@/lib/models";
+import {
+  formatModelPricing,
+  MODELS,
+  type Model,
+  type ModelCapability,
+} from "@/lib/models";
 
 const CAPABILITY_META: Record<
   ModelCapability,
   { icon: typeof Eye; label: string }
 > = {
-  vision: { icon: Eye, label: "Vision" },
-  tools: { icon: Wrench, label: "Tools" },
+  image: { icon: Eye, label: "Image uploads" },
   reasoning: { icon: Brain, label: "Reasoning" },
+  pdf: { icon: FileText, label: "PDFs" },
   "image-gen": { icon: Image, label: "Image Gen" },
 };
 
@@ -211,8 +216,8 @@ function ModelRow({
               {model.badge}
             </span>
           )}
-          <span className="shrink-0 text-[10px] text-muted-foreground/50 font-mono">
-            {model.pricing}
+          <span className="shrink-0 text-[10px] text-muted-foreground/50 font-mono tabular-nums">
+            {formatModelPricing(model.pricing)}
           </span>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground truncate">

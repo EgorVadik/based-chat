@@ -210,6 +210,10 @@ export default function ChatArea({
     message: string,
     attachments: DraftAttachment[],
     uploadHandlers?: AttachmentUploadHandlers,
+    options?: {
+      webSearchEnabled?: boolean;
+      webSearchMaxResults?: number;
+    },
   ) => void | Promise<void>;
   onEditMessage: (
     message: ChatMessage,
@@ -451,8 +455,8 @@ export default function ChatArea({
         onValueChange={setDraftMessage}
         autoFocus={!thread && !isThreadPending}
         resetKey={thread?._id ?? "new-thread"}
-        onSend={async (message, attachments, uploadHandlers) => {
-          await onSendMessage(message, attachments, uploadHandlers);
+        onSend={async (message, attachments, uploadHandlers, options) => {
+          await onSendMessage(message, attachments, uploadHandlers, options);
           setDraftMessage("");
         }}
         isStreaming={isStreaming}

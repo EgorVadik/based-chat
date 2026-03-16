@@ -15,6 +15,13 @@ export type MessageGenerationStats = {
   textTokens?: number;
   reasoningTokens?: number;
 };
+export type ChatMessageSource = {
+  id: string;
+  url: string;
+  title?: string;
+  snippet?: string;
+  hostname?: string;
+};
 
 export type ChatMessage = {
   id: string;
@@ -22,6 +29,7 @@ export type ChatMessage = {
   role: MessageRole;
   content: string;
   reasoningText?: string;
+  sources: ChatMessageSource[];
   attachments: MessageAttachment[];
   modelId?: string;
   model?: Model;
@@ -40,6 +48,7 @@ type MessageLike = {
   role: MessageRole;
   content: string;
   reasoningText?: string;
+  sources?: ChatMessageSource[];
   attachments?: MessageAttachment[];
   modelId?: string;
   streamId?: string;
@@ -59,6 +68,7 @@ export function toChatMessage(
     role: message.role,
     content: message.content,
     reasoningText: message.reasoningText,
+    sources: message.sources ?? [],
     attachments: message.attachments ?? [],
     modelId: message.modelId,
     model: message.modelId ? getModelById(message.modelId) : undefined,
