@@ -1,4 +1,5 @@
 import { env } from "@based-chat/env/web";
+import { Analytics } from "@vercel/analytics/react";
 import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { ConvexReactClient } from "convex/react";
@@ -36,5 +37,10 @@ if (!rootElement) {
 
 if (!rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement);
-  root.render(<RouterProvider router={router} />);
+  root.render(
+    <>
+      <RouterProvider router={router} />
+      <Analytics />
+    </>,
+  );
 }
