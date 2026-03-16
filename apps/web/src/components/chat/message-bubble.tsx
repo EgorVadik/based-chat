@@ -26,7 +26,14 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { toast } from 'sonner'
 
 import type { ComposerAttachment } from '@/lib/attachments'
@@ -154,7 +161,8 @@ function areMessagesEqual(left: ChatMessage, right: ChatMessage) {
       right.generationStats?.tokensPerSecond &&
     left.generationStats?.costUsd === right.generationStats?.costUsd &&
     left.generationStats?.inputTokens === right.generationStats?.inputTokens &&
-    left.generationStats?.outputTokens === right.generationStats?.outputTokens &&
+    left.generationStats?.outputTokens ===
+      right.generationStats?.outputTokens &&
     left.generationStats?.totalTokens === right.generationStats?.totalTokens &&
     left.generationStats?.textTokens === right.generationStats?.textTokens &&
     left.generationStats?.reasoningTokens ===
@@ -219,7 +227,9 @@ function SearchSection({
   className?: string
 }) {
   return (
-    <div className={cn('w-full max-w-full md:max-w-[min(56rem,86vw)]', className)}>
+    <div
+      className={cn('w-full max-w-full md:max-w-[min(56rem,86vw)]', className)}
+    >
       <button
         type='button'
         onClick={onToggle}
@@ -249,11 +259,7 @@ function SearchSection({
   )
 }
 
-function SearchGroundingList({
-  sources,
-}: {
-  sources: ChatMessage['sources']
-}) {
+function SearchGroundingList({ sources }: { sources: ChatMessage['sources'] }) {
   return (
     <div className='rounded-[26px] border border-border/50 bg-card/55 px-5 py-5 shadow-sm backdrop-blur-sm'>
       <div className='flex flex-col gap-3'>
@@ -417,10 +423,10 @@ function ImageGenerationSkeleton() {
   return (
     <div className='space-y-3'>
       <div className='overflow-hidden rounded-[24px] border border-border/50 bg-card/55 shadow-sm backdrop-blur-sm'>
-        <Skeleton className='h-[18rem] w-full rounded-none bg-white/[0.05]' />
-        <div className='space-y-2 border-t border-white/[0.04] px-4 py-3'>
-          <Skeleton className='h-3 w-28 rounded-full bg-white/[0.05]' />
-          <Skeleton className='h-2.5 w-40 rounded-full bg-white/[0.04]' />
+        <Skeleton className='h-72 w-full rounded-none bg-white/5' />
+        <div className='space-y-2 border-t border-white/4 px-4 py-3'>
+          <Skeleton className='h-3 w-28 rounded-full bg-white/5' />
+          <Skeleton className='h-2.5 w-40 rounded-full bg-white/4' />
         </div>
       </div>
       <div className='inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-[11px] text-muted-foreground/85'>
@@ -615,7 +621,10 @@ function MessageBubble({
       return
     }
 
-    onEditingAttachmentsChange?.([...editingAttachments, ...supportedAttachments])
+    onEditingAttachmentsChange?.([
+      ...editingAttachments,
+      ...supportedAttachments,
+    ])
     setFileInputKey((currentKey) => currentKey + 1)
   }
 
@@ -863,7 +872,7 @@ function MessageBubble({
                 onToggle={() => setIsReasoningOpen((open) => !open)}
               >
                 <div className='rounded-[26px] border border-border/50 bg-card/55 px-6 py-5 shadow-sm backdrop-blur-sm'>
-                  <div className='whitespace-pre-wrap break-words text-[15px] leading-8 text-muted-foreground/95'>
+                  <div className='whitespace-pre-wrap wrap-break-word text-[15px] leading-8 text-muted-foreground/95'>
                     {reasoningText}
                   </div>
                 </div>
@@ -969,7 +978,9 @@ function MessageBubble({
                   {message.generationStats?.costUsd != null ? (
                     <div className='inline-flex items-center gap-1.5'>
                       <span className='text-muted-foreground/70'>$</span>
-                      <span>{formatCostUsd(message.generationStats.costUsd)}</span>
+                      <span>
+                        {formatCostUsd(message.generationStats.costUsd)}
+                      </span>
                     </div>
                   ) : null}
                   {message.generationStats?.tokensPerSecond != null ? (
