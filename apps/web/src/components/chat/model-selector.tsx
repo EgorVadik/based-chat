@@ -247,7 +247,7 @@ function ModelRow({
   return (
     <div
       className={cn(
-        "grid grid-cols-[20px_1fr_auto_auto_auto] items-center gap-x-2.5 rounded-xl px-3 py-2.5 transition-colors",
+        "grid grid-cols-[20px_1fr_auto] items-center gap-x-2 rounded-xl px-2 py-2.5 transition-colors sm:grid-cols-[20px_1fr_auto_auto_auto] sm:gap-x-2.5 sm:px-3",
         isSelected
           ? "bg-primary/10 text-foreground"
           : "text-foreground hover:bg-accent/50",
@@ -258,12 +258,12 @@ function ModelRow({
         type="button"
         onClick={() => onSelect(model)}
         disabled={isDisabled}
-        className="col-span-2 grid grid-cols-subgrid items-center gap-x-2.5 text-left disabled:cursor-not-allowed"
+        className="col-span-2 grid grid-cols-subgrid items-center gap-x-2 text-left sm:gap-x-2.5 disabled:cursor-not-allowed"
       >
         <ProviderIcon provider={model.provider} />
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold leading-5 whitespace-nowrap">
+            <span className="truncate text-sm font-semibold leading-5">
               {model.name}
             </span>
             {model.badge ? (
@@ -278,13 +278,15 @@ function ModelRow({
         </div>
       </button>
 
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="hidden shrink-0 items-center gap-1 sm:flex">
         {model.capabilities.map((capability) => (
           <CapabilityIcon key={capability} capability={capability} />
         ))}
       </div>
 
-      <ModelInfoTooltip model={model} />
+      <div className="hidden sm:block">
+        <ModelInfoTooltip model={model} />
+      </div>
 
       <div className="flex shrink-0 items-center justify-end">
         <Tooltip open={isFavorite && isUnfavoriteArmed}>
@@ -329,7 +331,7 @@ function ProviderSidebar({
   onSelectFilter: (filter: ModelFilter) => void;
 }) {
   return (
-    <div className="max-h-80 w-[72px] shrink-0 overflow-y-auto border-r border-border/50 px-2 py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+    <div className="max-h-80 w-14 shrink-0 overflow-y-auto border-r border-border/50 px-1.5 py-2 sm:w-[72px] sm:px-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
       <div className="flex min-h-full flex-col items-center gap-1">
         <Tooltip>
           <TooltipTrigger
@@ -339,9 +341,9 @@ function ProviderSidebar({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "relative size-12 rounded-xl",
+                  "relative size-10 rounded-xl sm:size-12",
                   selectedFilter === "favorites"
-                    ? "bg-accent/70 text-foreground after:absolute after:right-[-9px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary"
+                    ? "bg-accent/70 text-foreground after:absolute after:right-[-7px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary sm:after:right-[-9px]"
                     : "text-muted-foreground/55 hover:bg-accent/40 hover:text-muted-foreground",
                 )}
               />
@@ -368,9 +370,9 @@ function ProviderSidebar({
                   variant="ghost"
                   size="icon"
                   className={cn(
-                    "relative size-12 rounded-xl",
+                    "relative size-10 rounded-xl sm:size-12",
                     selectedFilter === provider.id
-                      ? "bg-accent/70 text-foreground after:absolute after:right-[-9px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary"
+                      ? "bg-accent/70 text-foreground after:absolute after:right-[-7px] after:h-7 after:w-0.5 after:rounded-full after:bg-primary sm:after:right-[-9px]"
                       : "text-muted-foreground/55 hover:bg-accent/40 hover:text-muted-foreground",
                   )}
                 />
@@ -609,7 +611,7 @@ export default function ModelSelector({
           sideOffset={8}
           className="z-50 outline-none"
         >
-          <Popover.Popup className="w-[520px] overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-xl ring-1 ring-foreground/10 origin-(--transform-origin) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+          <Popover.Popup className="w-[520px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-xl ring-1 ring-foreground/10 origin-(--transform-origin) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
             <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
               <div className="flex flex-1 items-center gap-2 rounded-lg bg-muted/35 px-2.5 py-2">
                 <Search className="size-4 shrink-0 text-muted-foreground/50" />
