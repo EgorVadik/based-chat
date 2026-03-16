@@ -7,7 +7,7 @@ import {
 import { cn } from '@based-chat/ui/lib/utils'
 import { useRouter } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Info } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { authClient } from '@/lib/auth-client'
@@ -110,6 +110,10 @@ export default function SettingsPage({
             {/* Usage stats */}
             <div className='mt-8 w-full rounded-xl border border-border/50 bg-card/30 p-4 space-y-3'>
               <h3 className='text-xs font-medium'>Usage</h3>
+              <div className='flex items-start gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground'>
+                <Info className='mt-0.5 size-3 shrink-0 text-foreground/60' />
+                <p>Temporary chats are not included in these totals.</p>
+              </div>
               <div className='space-y-2'>
                 <div className='flex items-center justify-between'>
                   <span className='text-[11px] text-muted-foreground'>

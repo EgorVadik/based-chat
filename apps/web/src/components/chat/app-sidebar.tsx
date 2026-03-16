@@ -17,8 +17,11 @@ import { Input } from '@based-chat/ui/components/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@based-chat/ui/components/dropdown-menu'
 import {
@@ -47,6 +50,10 @@ import {
   ExternalLink,
   PencilLine,
   FileText,
+  User,
+  Key,
+  Cpu,
+  Shield,
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
@@ -593,20 +600,23 @@ function AppSidebar({
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <button className='flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left hover:bg-sidebar-accent transition-colors'>
-                <Avatar size='sm'>
-                  <AvatarFallback className='bg-primary/15 text-primary text-[10px] font-semibold'>
-                    {initials}
-                  </AvatarFallback>
-                  <AvatarImage src={user.image || undefined} />
-                </Avatar>
+              <button className='flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left hover:bg-sidebar-accent/80 transition-colors group/user'>
+                <div className='relative'>
+                  <Avatar size='sm'>
+                    <AvatarFallback className='bg-primary/15 text-primary text-[10px] font-semibold'>
+                      {initials}
+                    </AvatarFallback>
+                    <AvatarImage src={user.image || undefined} />
+                  </Avatar>
+                  <span className='absolute -bottom-px -right-px size-2 rounded-full bg-emerald-500 ring-2 ring-sidebar' />
+                </div>
                 <div className='flex-1 min-w-0'>
                   <p className='text-xs font-medium truncate'>{displayName}</p>
                   <p className='text-[10px] text-muted-foreground truncate'>
                     {displayEmail}
                   </p>
                 </div>
-                <ChevronsUpDown className='size-3.5 text-muted-foreground' />
+                <ChevronsUpDown className='size-3.5 text-muted-foreground/50 group-hover/user:text-muted-foreground transition-colors' />
               </button>
             }
           />
@@ -614,45 +624,84 @@ function AppSidebar({
             side='top'
             align='start'
             sideOffset={8}
-            className='w-56'
+            className='w-64 p-0'
           >
-            <DropdownMenuItem
-              onClick={() =>
-                router.navigate({
-                  to: '/settings',
-                  search: {
-                    tab: 'profile',
-                  },
-                })
-              }
-            >
-              <Settings className='size-3.5' />
-              <span>Settings</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <MessageSquare className='size-3.5' />
-              <span>Feedback</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant='destructive'
-              onClick={() => {
-                authClient.signOut({
-                  fetchOptions: {
-                    onSuccess: () => {
-                      toast.success('Signed out.')
+            <div className='flex items-center gap-3 px-3 py-3 border-b border-border/50'>
+              <Avatar size='sm'>
+                <AvatarFallback className='bg-primary/15 text-primary text-[10px] font-semibold'>
+                  {initials}
+                </AvatarFallback>
+                <AvatarImage src={user.image || undefined} />
+              </Avatar>
+              <div className='flex-1 min-w-0'>
+                <p className='text-xs font-medium truncate'>{displayName}</p>
+                <p className='text-[10px] text-muted-foreground truncate'>
+                  {displayEmail}
+                </p>
+              </div>
+            </div>
+
+            <div className='p-1'>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Account</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={() =>
+                    router.navigate({
+                      to: '/settings',
+                      search: { tab: 'profile' },
+                    })
+                  }
+                >
+                  <User className='size-3.5' />
+                  <span>Profile</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    router.navigate({
+                      to: '/settings',
+                      search: { tab: 'api-keys' },
+                    })
+                  }
+                >
+                  <Key className='size-3.5' />
+                  <span>API Keys</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    router.navigate({
+                      to: '/settings',
+                      search: { tab: 'security' },
+                    })
+                  }
+                >
+                  <Shield className='size-3.5' />
+                  <span>Security</span>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuItem
+                variant='destructive'
+                onClick={() => {
+                  authClient.signOut({
+                    fetchOptions: {
+                      onSuccess: () => {
+                        toast.success('Signed out.')
+                      },
+                      onError: (error) => {
+                        toast.error(
+                          error.error.message || error.error.statusText,
+                        )
+                      },
                     },
-                    onError: (error) => {
-                      toast.error(error.error.message || error.error.statusText)
-                    },
-                  },
-                })
-              }}
-            >
-              <LogOut className='size-3.5' />
-              <span>Sign out</span>
-            </DropdownMenuItem>
+                  })
+                }}
+              >
+                <LogOut className='size-3.5' />
+                <span>Sign out</span>
+              </DropdownMenuItem>
+            </div>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
