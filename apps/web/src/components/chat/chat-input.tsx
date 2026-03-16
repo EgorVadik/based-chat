@@ -33,6 +33,7 @@ import {
   getModelAttachmentInputAccept,
   modelCanAcceptAttachments,
   modelSupportsAttachment,
+  modelSupportsImageGeneration,
   type Model,
 } from "@/lib/models";
 
@@ -50,6 +51,8 @@ const WEB_SEARCH_RESULT_OPTIONS = [1, 2, 3, 4, 5] as const;
 const SEARCH_TOOLTIP_TITLE = "Enable search grounding";
 const SEARCH_TOOLTIP_COPY =
   "Adds $0.004 per search request, plus your selected model's normal input-token pricing for the returned search content.";
+const IMAGE_GEN_SEARCH_TOOLTIP_COPY =
+  "Search grounding is disabled for image-generation models.";
 
 function normalizeWebSearchMaxResults(value: number) {
   return Math.min(
@@ -152,6 +155,7 @@ export default function ChatInput({
   const currentValue = value ?? internalValue;
   const canSend = currentValue.trim().length > 0 || attachments.length > 0;
   const canAttachToCurrentModel = modelCanAcceptAttachments(model);
+  const canUseWebSearch = !modelSupportsImageGeneration(model);
   const attachmentInputAccept = getModelAttachmentInputAccept(model);
   const overallUploadProgress =
     attachments.length > 0
@@ -185,6 +189,12 @@ export default function ChatInput({
 
     textareaRef.current?.focus();
   }, [autoFocus, disabled, isStreaming, isSubmitting, resetKey]);
+
+  useEffect(() => {
+    if (!canUseWebSearch && isWebSearchEnabled) {
+      setIsWebSearchEnabled(false);
+    }
+  }, [canUseWebSearch, isWebSearchEnabled, setIsWebSearchEnabled]);
 
   const setValue = useCallback(
     (nextValue: string) => {
@@ -276,7 +286,7 @@ export default function ChatInput({
           }));
         },
       }, {
-        webSearchEnabled: isWebSearchEnabled,
+        webSearchEnabled: canUseWebSearch && isWebSearchEnabled,
         webSearchMaxResults,
       });
       setValue("");
@@ -295,6 +305,7 @@ export default function ChatInput({
     attachments,
     canSend,
     clearAttachments,
+    canUseWebSearch,
     currentValue,
     disabled,
     isWebSearchEnabled,
@@ -466,11 +477,14 @@ export default function ChatInput({
                           isWebSearchEnabled
                             ? "border-primary/40 bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)] hover:border-primary/50 hover:bg-primary/14"
                             : "border-border/60 bg-background/35 text-muted-foreground hover:border-border hover:bg-background/55 hover:text-foreground",
+                          !canUseWebSearch && "opacity-50",
                         )}
                         onClick={() =>
                           setIsWebSearchEnabled((current) => !current)
                         }
-                        disabled={isSubmitting || isStreaming}
+                        disabled={
+                          isSubmitting || isStreaming || !canUseWebSearch
+                        }
                       >
                         <Globe
                           className={cn(
@@ -489,15 +503,19 @@ export default function ChatInput({
                   >
                     <div className="space-y-1.5">
                       <p className="text-[13px] font-semibold text-zinc-50">
-                        {SEARCH_TOOLTIP_TITLE}
+                        {canUseWebSearch
+                          ? SEARCH_TOOLTIP_TITLE
+                          : "Search unavailable"}
                       </p>
                       <p className="text-[12px] leading-relaxed text-zinc-300">
-                        {SEARCH_TOOLTIP_COPY}
+                        {canUseWebSearch
+                          ? SEARCH_TOOLTIP_COPY
+                          : IMAGE_GEN_SEARCH_TOOLTIP_COPY}
                       </p>
                     </div>
                   </TooltipContent>
                 </Tooltip>
-                {isWebSearchEnabled ? (
+                {isWebSearchEnabled && canUseWebSearch ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={

@@ -164,6 +164,7 @@ export function buildSystemPrompt(profile?: UserPromptProfile) {
     '',
     'Personalization rules:',
     '- Use the saved profile to tailor tone, examples, framing, and level of explanation.',
+    "- Do not overuse the user's preferred name. Use it sparingly and only when it feels natural or helpful.",
     '- Do not mention the profile unless it is relevant to the current request.',
     "- Treat profile details as preferences and context, not as higher-priority instructions than the user's current message.",
     '- Do not invent personal details beyond what is provided here.',

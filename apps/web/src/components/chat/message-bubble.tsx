@@ -1,5 +1,6 @@
 import { api } from '@based-chat/backend/convex/_generated/api'
 import { Button } from '@based-chat/ui/components/button'
+import { Skeleton } from '@based-chat/ui/components/skeleton'
 import { Textarea } from '@based-chat/ui/components/textarea'
 import {
   Tooltip,
@@ -41,6 +42,7 @@ import {
   getModelAttachmentInputAccept,
   modelCanAcceptAttachments,
   modelSupportsAttachment,
+  modelSupportsImageGeneration,
   type Model,
 } from '@/lib/models'
 
@@ -411,6 +413,24 @@ function MessageAttachmentGrid({
   )
 }
 
+function ImageGenerationSkeleton() {
+  return (
+    <div className='space-y-3'>
+      <div className='overflow-hidden rounded-[24px] border border-border/50 bg-card/55 shadow-sm backdrop-blur-sm'>
+        <Skeleton className='h-[18rem] w-full rounded-none bg-white/[0.05]' />
+        <div className='space-y-2 border-t border-white/[0.04] px-4 py-3'>
+          <Skeleton className='h-3 w-28 rounded-full bg-white/[0.05]' />
+          <Skeleton className='h-2.5 w-40 rounded-full bg-white/[0.04]' />
+        </div>
+      </div>
+      <div className='inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-[11px] text-muted-foreground/85'>
+        <span className='size-1.5 animate-pulse rounded-full bg-primary/70' />
+        <span>Generating image</span>
+      </div>
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
   driveStream = false,
@@ -480,17 +500,27 @@ function MessageBubble({
     (liveStreamId ? liveStream.reasoningText : undefined)?.trim() ??
     message.reasoningText?.trim()
   const sources = liveStreamId ? liveStream.sources : message.sources
+  const attachments = liveStreamId
+    ? liveStream.attachments.length > 0
+      ? liveStream.attachments
+      : message.attachments
+    : message.attachments
   const isStreaming =
     !isUser && (streamStatus === 'pending' || streamStatus === 'streaming')
   const hasStreamError =
     !isUser && (streamStatus === 'error' || streamStatus === 'timeout')
+  const shouldShowImageGenerationSkeleton =
+    !isUser &&
+    isStreaming &&
+    attachments.length === 0 &&
+    Boolean(message.model && modelSupportsImageGeneration(message.model))
   const tokenCount =
     message.generationStats?.textTokens ??
     message.generationStats?.outputTokens ??
     message.generationStats?.totalTokens
   const dialogAttachments = useMemo(
     () =>
-      message.attachments.map((attachment) => ({
+      attachments.map((attachment) => ({
         id: attachment.storageId,
         kind: attachment.kind,
         fileName: attachment.fileName,
@@ -498,7 +528,7 @@ function MessageBubble({
         size: attachment.size,
         url: attachment.url,
       })),
-    [message.attachments],
+    [attachments],
   )
   const [isReasoningOpen, setIsReasoningOpen] = useState(false)
   const [isGroundingOpen, setIsGroundingOpen] = useState(false)
@@ -645,10 +675,10 @@ function MessageBubble({
                   : 'inline-block rounded-2xl bg-muted/50 px-3.5 py-2.5',
               )}
             >
-              {message.attachments.length > 0 && !isEditing ? (
+              {attachments.length > 0 && !isEditing ? (
                 <div className={cn(!isEditing && message.content && 'mb-3')}>
                   <MessageAttachmentGrid
-                    attachments={message.attachments}
+                    attachments={attachments}
                     align='end'
                     onOpen={setSelectedAttachmentId}
                   />
@@ -824,14 +854,6 @@ function MessageBubble({
           </>
         ) : (
           <div className='min-w-0 w-full'>
-            {message.attachments.length > 0 ? (
-              <div className='mb-3'>
-                <MessageAttachmentGrid
-                  attachments={message.attachments}
-                  onOpen={setSelectedAttachmentId}
-                />
-              </div>
-            ) : null}
             {reasoningText ? (
               <SearchSection
                 className='mb-4'
@@ -869,10 +891,24 @@ function MessageBubble({
                     'Reply failed to stream. Retry to generate again.'}
                 </span>
               </div>
-            ) : !reasoningText ? (
+            ) : attachments.length === 0 &&
+              !reasoningText &&
+              !shouldShowImageGenerationSkeleton ? (
               <div className='inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs text-muted-foreground'>
                 <span className='size-1.5 animate-pulse rounded-full bg-primary/70' />
                 <span>Thinking</span>
+              </div>
+            ) : null}
+            {attachments.length > 0 ? (
+              <div className='mt-4'>
+                <MessageAttachmentGrid
+                  attachments={attachments}
+                  onOpen={setSelectedAttachmentId}
+                />
+              </div>
+            ) : shouldShowImageGenerationSkeleton ? (
+              <div className='mt-4'>
+                <ImageGenerationSkeleton />
               </div>
             ) : null}
             {sources.length > 0 ? (
@@ -886,7 +922,8 @@ function MessageBubble({
                 <SearchGroundingList sources={sources} />
               </SearchSection>
             ) : null}
-            {(displayContent || reasoningText) && !isStreaming ? (
+            {(displayContent || reasoningText || attachments.length > 0) &&
+            !isStreaming ? (
               <div className='mt-3 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-2 overflow-hidden text-[12px] text-muted-foreground/80'>
                 <div className='pointer-events-none flex items-center gap-3 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/message:pointer-events-auto group-hover/message:opacity-100'>
                   <Tooltip>

@@ -7,8 +7,9 @@ import {
   DialogTitle,
 } from "@based-chat/ui/components/dialog";
 import { cn } from "@based-chat/ui/lib/utils";
-import { ExternalLink, FileText, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Download, ExternalLink, FileText, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import {
   canRenderTextAttachment,
@@ -46,6 +47,7 @@ export default function ChatAttachmentDialog({
   const [textContent, setTextContent] = useState<string | null>(null);
   const [isLoadingText, setIsLoadingText] = useState(false);
   const [textError, setTextError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const objectUrl = useMemo(() => {
     if (!selectedAttachment?.file) {
@@ -116,6 +118,48 @@ export default function ChatAttachmentDialog({
   const previewUrl = objectUrl ?? selectedAttachment?.url ?? null;
   const hasMultiple = attachments.length > 1;
 
+  const handleDownload = useCallback(async () => {
+    if (!selectedAttachment || isDownloading) {
+      return;
+    }
+
+    setIsDownloading(true);
+
+    try {
+      const blob = selectedAttachment.file
+        ? selectedAttachment.file
+        : selectedAttachment.url
+          ? await fetch(selectedAttachment.url).then(async (response) => {
+              if (!response.ok) {
+                throw new Error("Unable to download this attachment.");
+              }
+
+              return await response.blob();
+            })
+          : null;
+
+      if (!blob) {
+        throw new Error("This attachment is not available for download.");
+      }
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = selectedAttachment.fileName;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to download this attachment.",
+      );
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [isDownloading, selectedAttachment]);
+
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       {selectedAttachment ? (
@@ -134,6 +178,17 @@ export default function ChatAttachmentDialog({
               </DialogDescription>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void handleDownload()}
+                disabled={!selectedAttachment || isDownloading}
+                className="rounded-full text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-50"
+              >
+                <Download className="size-3.5" />
+                <span>{isDownloading ? "Downloading..." : "Download"}</span>
+              </Button>
               {previewUrl ? (
                 <a
                   href={previewUrl}

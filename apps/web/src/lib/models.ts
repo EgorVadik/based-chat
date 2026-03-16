@@ -656,6 +656,10 @@ export function modelSupportsFileAttachments(model: Model) {
   return model.capabilities.includes("pdf");
 }
 
+export function modelSupportsImageGeneration(model: Model) {
+  return model.capabilities.includes("image-gen");
+}
+
 export function modelCanAcceptAttachments(model: Model) {
   return modelSupportsImageUploads(model) || modelSupportsFileAttachments(model);
 }

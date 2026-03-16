@@ -46,6 +46,10 @@ type TemporaryStreamEvent =
       source: ChatMessageSource
     }
   | {
+      type: 'attachment'
+      attachment: MessageAttachment
+    }
+  | {
       type: 'finish'
       generationStats?: MessageGenerationStats
     }
@@ -183,6 +187,7 @@ export function startTemporaryChatStream({
   onTextDelta,
   onReasoningDelta,
   onSource,
+  onAttachment,
   onFinish,
   onError,
 }: {
@@ -194,6 +199,7 @@ export function startTemporaryChatStream({
   onTextDelta: (text: string) => void
   onReasoningDelta: (text: string) => void
   onSource?: (source: ChatMessageSource) => void
+  onAttachment?: (attachment: MessageAttachment) => void
   onFinish?: (generationStats?: MessageGenerationStats) => void
   onError?: (errorMessage: string) => void
 }) {
@@ -289,6 +295,11 @@ export function startTemporaryChatStream({
 
         if (streamEvent.type === 'source') {
           onSource?.(streamEvent.source)
+          continue
+        }
+
+        if (streamEvent.type === 'attachment') {
+          onAttachment?.(streamEvent.attachment)
           continue
         }
 

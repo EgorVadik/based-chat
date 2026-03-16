@@ -11,12 +11,14 @@ import {
 } from "react";
 
 import { getStoredOpenRouterApiKey } from "@/lib/api-key-storage";
+import type { MessageAttachment } from "@/lib/attachments";
 import { authClient } from "@/lib/auth-client";
 import type { ChatMessageSource } from "@/lib/chat";
 
 type PersistentBody = StreamBody & {
   errorMessage?: string;
   sources?: ChatMessageSource[];
+  attachments?: MessageAttachment[];
 };
 type StreamStatus = StreamBody["status"];
 type StreamStartResult = {
@@ -27,6 +29,7 @@ type PersistentStreamState = PersistentBody & {
   errorMessage?: string;
   reasoningText?: string;
   sources: ChatMessageSource[];
+  attachments: MessageAttachment[];
 };
 
 const TERMINAL_STATUSES = new Set<StreamStatus>(["done", "error", "timeout"]);
@@ -80,6 +83,48 @@ function mergeSourceLists(
   return liveSources.reduce(mergeSources, persistentSources);
 }
 
+function mergeAttachments(
+  currentAttachments: MessageAttachment[],
+  nextAttachment: MessageAttachment,
+) {
+  const existingAttachmentIndex = currentAttachments.findIndex(
+    (attachment) => attachment.storageId === nextAttachment.storageId,
+  );
+
+  if (existingAttachmentIndex === -1) {
+    return [...currentAttachments, nextAttachment];
+  }
+
+  const existingAttachment = currentAttachments[existingAttachmentIndex]!;
+  const mergedAttachment: MessageAttachment = {
+    ...existingAttachment,
+    ...nextAttachment,
+    url: nextAttachment.url ?? existingAttachment.url,
+  };
+
+  if (
+    mergedAttachment.kind === existingAttachment.kind &&
+    mergedAttachment.storageId === existingAttachment.storageId &&
+    mergedAttachment.fileName === existingAttachment.fileName &&
+    mergedAttachment.contentType === existingAttachment.contentType &&
+    mergedAttachment.size === existingAttachment.size &&
+    mergedAttachment.url === existingAttachment.url
+  ) {
+    return currentAttachments;
+  }
+
+  return currentAttachments.map((attachment, index) =>
+    index === existingAttachmentIndex ? mergedAttachment : attachment,
+  );
+}
+
+function mergeAttachmentLists(
+  persistentAttachments: MessageAttachment[],
+  liveAttachments: MessageAttachment[],
+) {
+  return liveAttachments.reduce(mergeAttachments, persistentAttachments);
+}
+
 export function abortPersistentTextStream(streamId: StreamId) {
   streamAbortControllers.get(streamId)?.abort();
 }
@@ -99,6 +144,7 @@ export function usePersistentTextStream(
   const [streamBody, setStreamBody] = useState("");
   const [streamReasoningBody, setStreamReasoningBody] = useState("");
   const [streamSources, setStreamSources] = useState<ChatMessageSource[]>([]);
+  const [streamAttachments, setStreamAttachments] = useState<MessageAttachment[]>([]);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | undefined>(
     undefined,
   );
@@ -113,12 +159,17 @@ export function usePersistentTextStream(
     streamId ? { streamId } : "skip",
   );
   const persistentText = persistentBody?.text ?? "";
+  const persistentAttachments = persistentBody?.attachments ?? [];
   const hasPersistentRecoveryState =
     persistentBody != null &&
     (persistentText.length > 0 ||
+      persistentAttachments.length > 0 ||
       persistentBody.status === "streaming" ||
       persistentBody.status === "done");
   const hasDirectStreamText = streamBody.length > 0;
+  const hasDirectStreamAttachments = streamAttachments.length > 0;
+  const hasDirectStreamContent =
+    hasDirectStreamText || hasDirectStreamAttachments;
 
   const flushPendingChunks = useCallback(() => {
     const chunk = pendingChunkRef.current;
@@ -164,6 +215,7 @@ export function usePersistentTextStream(
     setStreamBody("");
     setStreamReasoningBody("");
     setStreamSources([]);
+    setStreamAttachments([]);
     setStreamErrorMessage(undefined);
     setDidPersistenceStall(false);
     streamStarted.current = false;
@@ -207,6 +259,15 @@ export function usePersistentTextStream(
           });
         }
       },
+      onAttachment(attachment) {
+        if (!cancelled) {
+          startTransition(() => {
+            setStreamAttachments((currentAttachments) =>
+              mergeAttachments(currentAttachments, attachment),
+            );
+          });
+        }
+      },
     }).then((result) => {
       if (!cancelled) {
         flushPendingChunks();
@@ -246,12 +307,17 @@ export function usePersistentTextStream(
         text: "",
         status: "pending",
         sources: [],
+        attachments: [],
       };
     }
 
     const resolvedSources = mergeSourceLists(
       persistentBody?.sources ?? [],
       streamSources,
+    );
+    const resolvedAttachments = mergeAttachmentLists(
+      persistentBody?.attachments ?? [],
+      streamAttachments,
     );
 
     if (persistentBody?.errorMessage) {
@@ -261,6 +327,7 @@ export function usePersistentTextStream(
         errorMessage: persistentBody.errorMessage,
         reasoningText: streamReasoningBody || undefined,
         sources: resolvedSources,
+        attachments: resolvedAttachments,
       };
     }
 
@@ -274,6 +341,7 @@ export function usePersistentTextStream(
             : undefined,
         reasoningText: streamReasoningBody || undefined,
         sources: resolvedSources,
+        attachments: resolvedAttachments,
       };
     }
 
@@ -285,6 +353,7 @@ export function usePersistentTextStream(
           errorMessage: persistentBody?.errorMessage,
           reasoningText: streamReasoningBody || undefined,
           sources: resolvedSources,
+          attachments: resolvedAttachments,
         };
       }
 
@@ -297,12 +366,17 @@ export function usePersistentTextStream(
           "Reply failed to stream. Retry to generate again.",
         reasoningText: streamReasoningBody || undefined,
         sources: resolvedSources,
+        attachments: resolvedAttachments,
       };
     }
 
     if (driven) {
       if (streamEnded === true) {
-        if (didPersistenceStall && !hasDirectStreamText && !hasPersistentRecoveryState) {
+        if (
+          didPersistenceStall &&
+          !hasDirectStreamContent &&
+          !hasPersistentRecoveryState
+        ) {
           return {
             text: "",
             status: "error",
@@ -311,26 +385,29 @@ export function usePersistentTextStream(
               streamErrorMessage ??
               "The reply stalled before the stream could finish.",
             sources: resolvedSources,
+            attachments: resolvedAttachments,
           };
         }
 
         return {
           text: streamBody || persistentText,
           status:
-            persistentBody?.status === "pending" && !hasDirectStreamText
+            persistentBody?.status === "pending" && !hasDirectStreamContent
               ? "pending"
               : "streaming",
           errorMessage: persistentBody?.errorMessage ?? streamErrorMessage,
           reasoningText: streamReasoningBody || undefined,
           sources: resolvedSources,
+          attachments: resolvedAttachments,
         };
       }
 
       return {
         text: streamBody,
-        status: hasDirectStreamText ? "streaming" : "pending",
+        status: hasDirectStreamContent ? "streaming" : "pending",
         reasoningText: streamReasoningBody || undefined,
         sources: resolvedSources,
+        attachments: resolvedAttachments,
       };
     }
 
@@ -338,20 +415,24 @@ export function usePersistentTextStream(
       ? {
           ...persistentBody,
           sources: resolvedSources,
+          attachments: resolvedAttachments,
         }
       : {
           text: "",
           status: "pending",
           sources: [],
+          attachments: [],
         };
   }, [
     didPersistenceStall,
     driven,
-    hasDirectStreamText,
+    hasDirectStreamContent,
     hasPersistentRecoveryState,
+    persistentAttachments,
     persistentBody,
     persistentText,
     streamBody,
+    streamAttachments,
     streamReasoningBody,
     streamEnded,
     streamErrorMessage,
@@ -374,6 +455,10 @@ type StreamEvent =
       source: ChatMessageSource;
     }
   | {
+      type: "attachment";
+      attachment: MessageAttachment;
+    }
+  | {
       type: "error";
       errorMessage: string;
     };
@@ -385,6 +470,7 @@ async function startStreaming(
     onTextDelta: (text: string) => void;
     onReasoningDelta: (text: string) => void;
     onSource: (source: ChatMessageSource) => void;
+    onAttachment: (attachment: MessageAttachment) => void;
   },
 ): Promise<StreamStartResult> {
   const abortController = new AbortController();
@@ -491,6 +577,11 @@ async function startStreaming(
 
       if (streamEvent.type === "source") {
         handlers.onSource(streamEvent.source);
+        continue;
+      }
+
+      if (streamEvent.type === "attachment") {
+        handlers.onAttachment(streamEvent.attachment);
         continue;
       }
 

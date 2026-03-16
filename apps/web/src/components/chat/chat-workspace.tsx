@@ -1275,6 +1275,27 @@ export default function ChatWorkspace({
             }
           })
         },
+        onAttachment: (attachment) => {
+          patchTemporaryMessage(assistantMessageId, (message) => {
+            if (
+              message.attachments.some(
+                (entry) => entry.storageId === attachment.storageId,
+              )
+            ) {
+              return message
+            }
+
+            return {
+              ...message,
+              attachments: [...message.attachments, attachment],
+              streamStatus:
+                message.streamStatus === 'pending'
+                  ? 'streaming'
+                  : message.streamStatus,
+              updatedAt: Date.now(),
+            }
+          })
+        },
         onFinish: (generationStats) => {
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
