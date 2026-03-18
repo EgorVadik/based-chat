@@ -1,0 +1,22 @@
+// Re-export all model types, data, and helpers from the shared package
+export {
+  type Model,
+  type ModelCapability,
+  type ModelPricing,
+  PROVIDERS,
+  MODELS,
+  DEFAULT_MODEL,
+  LOBE_ICON_CDN_BASE,
+  PROVIDER_ICON_IDS,
+  getProviderIconUrl,
+  formatUsdPerMillionTokens,
+  formatModelPricing,
+  modelSupportsImageUploads,
+  modelSupportsFileAttachments,
+  modelSupportsImageGeneration,
+  modelCanAcceptAttachments,
+  getModelAttachmentInputAccept,
+  modelSupportsAttachment,
+  modelSupportsAttachments,
+  getModelById,
+} from '@based-chat/lib/models'

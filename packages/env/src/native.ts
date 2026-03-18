@@ -6,6 +6,7 @@ export const env = createEnv({
   client: {
     EXPO_PUBLIC_CONVEX_URL: z.url(),
     EXPO_PUBLIC_CONVEX_SITE_URL: z.url(),
+    EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: z.string(),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

@@ -13,6 +13,7 @@
   "dependencies": {
     "@based-chat/backend": "workspace:*",
     "@based-chat/env": "workspace:*",
+    "@based-chat/lib": "workspace:*",
     "@based-chat/ui": "workspace:*",
     "@convex-dev/better-auth": "catalog:",
     "@convex-dev/persistent-text-streaming": "^0.3.0",

@@ -28,9 +28,11 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { useTheme } from "@/components/theme-provider";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import {
   formatModelPricing,
+  getProviderIconUrl,
   MODELS,
   PROVIDERS,
   modelSupportsAttachments,
@@ -42,47 +44,6 @@ import type { ComposerAttachment, DraftAttachment } from "@/lib/attachments";
 type ModelFilter = "favorites" | (typeof PROVIDERS)[number]["id"];
 
 const MODEL_SELECTOR_FILTER_STORAGE_KEY = "based-chat:model-selector-filter";
-const LOBE_MONO_ICON_CDN = "https://unpkg.com/@lobehub/icons-static-png@latest/light";
-const PROVIDER_LOGOS: Record<
-  string,
-  {
-    id: string;
-  }
-> = {
-  Anthropic: {
-    id: "anthropic",
-  },
-  OpenAI: {
-    id: "openai",
-  },
-  Google: {
-    id: "gemini",
-  },
-  Meta: {
-    id: "meta",
-  },
-  DeepSeek: {
-    id: "deepseek",
-  },
-  xAI: {
-    id: "xai",
-  },
-  Qwen: {
-    id: "qwen",
-  },
-  Moonshot: {
-    id: "moonshot",
-  },
-  "Z.ai": {
-    id: "zhipu",
-  },
-  MiniMax: {
-    id: "minimax",
-  },
-  Stealth: {
-    id: "openrouter",
-  },
-};
 
 const CAPABILITY_CONFIG: Record<
   ModelCapability,
@@ -197,20 +158,24 @@ function ProviderLogo({
   provider: string;
   className?: string;
 }) {
-  const logo = PROVIDER_LOGOS[provider];
+  const { resolvedTheme } = useTheme();
+  const iconUrl = getProviderIconUrl(
+    provider,
+    (resolvedTheme as "light" | "dark") ?? "dark",
+  );
 
-  if (!logo) {
+  if (!iconUrl) {
     return <div className={cn("size-5 shrink-0", className)} aria-hidden="true" />;
   }
 
   return (
     <img
-      src={`${LOBE_MONO_ICON_CDN}/${logo.id}.png`}
+      src={iconUrl}
       alt=""
       aria-hidden="true"
       draggable={false}
       className={cn(
-        "size-5 shrink-0 select-none object-contain invert",
+        "size-5 shrink-0 select-none object-contain",
         className,
       )}
     />

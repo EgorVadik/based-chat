@@ -8,10 +8,19 @@
     },
     "name": "based-chat",
     "slug": "based-chat",
-    "plugins": ["expo-font"],
+    "plugins": [
+      "expo-font",
+      "@react-native-google-signin/google-signin"
+    ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "android": {
+      "package": "com.anonymous.basedchat"
+    },
+    "ios": {
+      "bundleIdentifier": "com.anonymous.basedchat"
     }
   }
 }

@@ -1,72 +1,60 @@
-import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { Link } from "expo-router";
-import { Drawer } from "expo-router/drawer";
-import { useThemeColor } from "heroui-native";
-import React, { useCallback } from "react";
-import { Pressable, Text } from "react-native";
+import { Drawer } from 'expo-router/drawer'
+import React from 'react'
 
-import { ThemeToggle } from "@/components/theme-toggle";
+import { ChatHeader } from '@/components/chat/chat-header'
+import { DrawerContent } from '@/components/drawer-content'
+import { ScreenHeader } from '@/components/screen-header'
+import { useColors } from '@/lib/use-colors'
 
 function DrawerLayout() {
-  const themeColorForeground = useThemeColor("foreground");
-  const themeColorBackground = useThemeColor("background");
-
-  const renderThemeToggle = useCallback(() => <ThemeToggle />, []);
+  const colors = useColors()
 
   return (
     <Drawer
+      drawerContent={() => <DrawerContent />}
       screenOptions={{
-        headerTintColor: themeColorForeground,
-        headerStyle: { backgroundColor: themeColorBackground },
-        headerTitleStyle: {
-          fontWeight: "600",
-          color: themeColorForeground,
-        },
-        headerRight: renderThemeToggle,
-        drawerStyle: { backgroundColor: themeColorBackground },
+        headerShown: false,
+        drawerType: 'front',
+        keyboardDismissMode: 'on-drag',
+        drawerStyle: { backgroundColor: colors.background },
       }}
     >
       <Drawer.Screen
-        name="index"
+        name='index'
         options={{
-          headerTitle: "Home",
-          drawerLabel: ({ color, focused }) => (
-            <Text style={{ color: focused ? color : themeColorForeground }}>Home</Text>
-          ),
-          drawerIcon: ({ size, color, focused }) => (
-            <Ionicons
-              name="home-outline"
-              size={size}
-              color={focused ? color : themeColorForeground}
-            />
-          ),
+          headerShown: true,
+          header: () => <ChatHeader />,
         }}
       />
       <Drawer.Screen
-        name="(tabs)"
+        name='chat/[threadId]'
         options={{
-          headerTitle: "Tabs",
-          drawerLabel: ({ color, focused }) => (
-            <Text style={{ color: focused ? color : themeColorForeground }}>Tabs</Text>
-          ),
-          drawerIcon: ({ size, color, focused }) => (
-            <MaterialIcons
-              name="border-bottom"
-              size={size}
-              color={focused ? color : themeColorForeground}
+          headerShown: true,
+          header: () => <ChatHeader />,
+        }}
+      />
+      <Drawer.Screen
+        name='temporary-chat'
+        options={{
+          headerShown: true,
+          header: () => <ChatHeader />,
+        }}
+      />
+      <Drawer.Screen
+        name='settings'
+        options={{
+          headerShown: true,
+          header: () => (
+            <ScreenHeader
+              title='Settings'
+              icon='cog-outline'
+              borderless
             />
-          ),
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable className="mr-4">
-                <Ionicons name="add-outline" size={24} color={themeColorForeground} />
-              </Pressable>
-            </Link>
           ),
         }}
       />
     </Drawer>
-  );
+  )
 }
 
-export default DrawerLayout;
+export default DrawerLayout

@@ -3,3 +3,32 @@
 @import "heroui-native/styles";
 
 @source './node_modules/heroui-native/lib';
+
+@theme {
+  --color-background-light: #f8f8fa;
+  --color-background-dark: #161620;
+  --color-foreground-light: #1c1c22;
+  --color-foreground-dark: #eaeaee;
+  --color-primary-light: #0a7a8a;
+  --color-primary-dark: #2dbbd4;
+  --color-primary-fg-light: #f5fafa;
+  --color-primary-fg-dark: #0a1518;
+  --color-secondary-light: #f0f0f4;
+  --color-secondary-dark: #2c2c34;
+  --color-muted-light: #f0f0f4;
+  --color-muted-dark: #2c2c34;
+  --color-muted-fg-light: #636370;
+  --color-muted-fg-dark: #82828e;
+  --color-accent-light: #e8e8ee;
+  --color-accent-dark: #363640;
+  --color-destructive-light: #d4422a;
+  --color-destructive-dark: #f05545;
+  --color-border-light: #e2e2e8;
+  --color-border-dark: rgba(255, 255, 255, 0.07);
+  --color-input-light: #e2e2e8;
+  --color-input-dark: rgba(255, 255, 255, 0.10);
+  --color-card-light: #ffffff;
+  --color-card-dark: #212128;
+  --color-ring-light: #0a7a8a;
+  --color-ring-dark: #2dbbd4;
+}

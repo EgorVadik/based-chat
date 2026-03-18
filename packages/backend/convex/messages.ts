@@ -1566,6 +1566,50 @@ export const abortAssistantReply = mutation({
   },
 })
 
+export const forceStopAssistantReply = mutation({
+  args: {
+    streamId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await getMessageByStreamId(ctx, args.streamId)
+    if (!message?.streamId) {
+      return null
+    }
+
+    await getAuthorizedThread(ctx, message.threadId)
+
+    const streamBody = await persistentTextStreaming.getStreamBody(
+      ctx,
+      message.streamId as StreamId,
+    )
+    if (
+      streamBody.status === 'done' ||
+      streamBody.status === 'error' ||
+      streamBody.status === 'timeout'
+    ) {
+      return null
+    }
+
+    const timestamp = Date.now()
+    const errorMessage = 'Stopped generating.'
+
+    await ctx.db.patch(message._id, {
+      stopRequestedAt: message.stopRequestedAt ?? timestamp,
+      errorMessage,
+      updatedAt: timestamp,
+    })
+    await ctx.runMutation(persistentTextStreaming.component.lib.setStreamStatus, {
+      streamId: message.streamId as StreamId,
+      status: 'error',
+    })
+
+    return {
+      messageId: message._id,
+      errorMessage,
+    }
+  },
+})
+
 export const markAssistantReplyError = internalMutation({
   args: {
     streamId: v.string(),

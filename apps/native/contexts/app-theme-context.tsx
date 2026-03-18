@@ -1,36 +1,75 @@
-import React, { createContext, useCallback, useContext, useMemo } from "react";
-import { Uniwind, useUniwind } from "uniwind";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+} from 'react'
+import { useMMKVString } from 'react-native-mmkv'
+import { Uniwind, useUniwind } from 'uniwind'
 
-type ThemeName = "light" | "dark";
+import { appStorage } from '@/lib/mmkv'
+
+type ThemeName = 'light' | 'dark'
+
+const THEME_STORAGE_KEY = 'based-chat-theme'
 
 type AppThemeContextType = {
-  currentTheme: string;
-  isLight: boolean;
-  isDark: boolean;
-  setTheme: (theme: ThemeName) => void;
-  toggleTheme: () => void;
-};
+  currentTheme: string
+  isLight: boolean
+  isDark: boolean
+  setTheme: (theme: ThemeName) => void
+  toggleTheme: () => void
+}
 
-const AppThemeContext = createContext<AppThemeContextType | undefined>(undefined);
+const AppThemeContext = createContext<AppThemeContextType | undefined>(
+  undefined,
+)
 
-export const AppThemeProvider = ({ children }: { children: React.ReactNode }) => {
-  const { theme } = useUniwind();
+export const AppThemeProvider = ({
+  children,
+}: {
+  children: React.ReactNode
+}) => {
+  const { theme } = useUniwind()
+  const [storedTheme, setStoredTheme] = useMMKVString(
+    THEME_STORAGE_KEY,
+    appStorage,
+  )
+
+  useEffect(() => {
+    if (storedTheme === 'light' || storedTheme === 'dark') {
+      Uniwind.setTheme(storedTheme)
+    }
+  }, [storedTheme])
 
   const isLight = useMemo(() => {
-    return theme === "light";
-  }, [theme]);
+    return theme === 'light'
+  }, [theme])
 
   const isDark = useMemo(() => {
-    return theme === "dark";
-  }, [theme]);
+    return theme === 'dark'
+  }, [theme])
 
-  const setTheme = useCallback((newTheme: ThemeName) => {
-    Uniwind.setTheme(newTheme);
-  }, []);
+  const persistTheme = useCallback(
+    (newTheme: ThemeName) => {
+      Uniwind.setTheme(newTheme)
+      setStoredTheme(newTheme)
+    },
+    [setStoredTheme],
+  )
+
+  const setTheme = useCallback(
+    (newTheme: ThemeName) => {
+      persistTheme(newTheme)
+    },
+    [persistTheme],
+  )
 
   const toggleTheme = useCallback(() => {
-    Uniwind.setTheme(theme === "light" ? "dark" : "light");
-  }, [theme]);
+    const nextTheme = theme === 'light' ? 'dark' : 'light'
+    persistTheme(nextTheme)
+  }, [persistTheme, theme])
 
   const value = useMemo(
     () => ({
@@ -41,15 +80,19 @@ export const AppThemeProvider = ({ children }: { children: React.ReactNode }) =>
       toggleTheme,
     }),
     [theme, isLight, isDark, setTheme, toggleTheme],
-  );
+  )
 
-  return <AppThemeContext.Provider value={value}>{children}</AppThemeContext.Provider>;
-};
+  return (
+    <AppThemeContext.Provider value={value}>
+      {children}
+    </AppThemeContext.Provider>
+  )
+}
 
 export function useAppTheme() {
-  const context = useContext(AppThemeContext);
+  const context = useContext(AppThemeContext)
   if (!context) {
-    throw new Error("useAppTheme must be used within AppThemeProvider");
+    throw new Error('useAppTheme must be used within AppThemeProvider')
   }
-  return context;
+  return context
 }
