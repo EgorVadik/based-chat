@@ -1,4 +1,3 @@
-import { env } from '@based-chat/env/native'
 import {
   GoogleSignin,
   statusCodes,
@@ -10,7 +9,7 @@ import { Platform } from 'react-native'
 import { authClient } from './auth-client'
 
 GoogleSignin.configure({
-  webClientId: env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID!,
 })
 
 export async function signInWithGoogle(): Promise<void> {

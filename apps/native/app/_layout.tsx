@@ -1,5 +1,4 @@
 import '@/global.css'
-import { env } from '@based-chat/env/native'
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet'
 import { ConvexBetterAuthProvider } from '@convex-dev/better-auth/react'
 import { ConvexReactClient, useConvexAuth } from 'convex/react'
@@ -17,7 +16,7 @@ export const unstable_settings = {
   initialRouteName: '(auth)',
 }
 
-const convex = new ConvexReactClient(env.EXPO_PUBLIC_CONVEX_URL, {
+const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
   unsavedChangesWarning: false,
 })
 

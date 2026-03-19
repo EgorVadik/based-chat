@@ -1,4 +1,3 @@
-import { env } from "@based-chat/env/native";
 import { expoClient } from "@better-auth/expo/client";
 import { convexClient, crossDomainClient } from "@convex-dev/better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
@@ -7,7 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
 export const authClient = createAuthClient({
-  baseURL: env.EXPO_PUBLIC_CONVEX_SITE_URL,
+  baseURL: process.env.EXPO_PUBLIC_CONVEX_SITE_URL!,
   plugins: [
     convexClient(),
     Platform.OS === "web"

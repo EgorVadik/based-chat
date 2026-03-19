@@ -1,4 +1,3 @@
-import { env } from '@based-chat/env/native'
 import { fetch as expoFetch } from 'expo/fetch'
 
 import type { PickedDocument } from '@/components/chat/chat-input'
@@ -222,7 +221,10 @@ export function startTemporaryChatStream({
     try {
       const apiKey = await getStoredOpenRouterApiKey()
       response = await expoFetch(
-        new URL('/messages/temp-stream', env.EXPO_PUBLIC_CONVEX_SITE_URL).toString(),
+        new URL(
+          '/messages/temp-stream',
+          process.env.EXPO_PUBLIC_CONVEX_SITE_URL!,
+        ).toString(),
         {
           method: 'POST',
           headers: {

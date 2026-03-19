@@ -1,5 +1,4 @@
 import type { Id } from '@based-chat/backend/convex/_generated/dataModel'
-import { env } from '@based-chat/env/native'
 import { fetch as expoFetch } from 'expo/fetch'
 import {
   FileSystemUploadType,
@@ -165,7 +164,10 @@ export function startPersistentMessageStream(
     let response: Response
     try {
       response = await expoFetch(
-        new URL('/messages/stream', env.EXPO_PUBLIC_CONVEX_SITE_URL).toString(),
+        new URL(
+          '/messages/stream',
+          process.env.EXPO_PUBLIC_CONVEX_SITE_URL!,
+        ).toString(),
         {
           method: 'POST',
           headers: {
