@@ -11,8 +11,8 @@ import { useMutation, useQuery } from 'convex/react'
 import * as Haptics from 'expo-haptics'
 import { useToast } from 'heroui-native'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { Image, Keyboard, Platform, Pressable, Text, View } from 'react-native'
-import { ScrollView } from 'react-native-gesture-handler'
+import { Image, Keyboard, Platform, Pressable, Text, View, type FlatList as NativeFlatList } from 'react-native'
+import { FlatList as GestureHandlerFlatList } from 'react-native-gesture-handler'
 
 import { useAppTheme } from '@/contexts/app-theme-context'
 import { appStorage } from '@/lib/mmkv'
@@ -39,9 +39,20 @@ const CAPABILITY_META: Record<ModelCapability, { icon: keyof typeof Ionicons.gly
 
 function getStoredFilter(providers: Provider[]): ModelFilter {
   const val = appStorage.getString(FILTER_STORAGE_KEY)
-  if (val === 'favorites' || providers.some((provider) => provider.id === val)) {
+
+  if (!val) return 'favorites'
+
+  if (val === 'favorites') {
     return val as ModelFilter
   }
+
+  // Allow the persisted provider filter to survive initial app startup before
+  // the provider catalog has finished loading. A later validation effect will
+  // reset it if it turns out to be invalid.
+  if (providers.length === 0 || providers.some((provider) => provider.id === val)) {
+    return val as ModelFilter
+  }
+
   return 'favorites'
 }
 
@@ -241,74 +252,134 @@ function ProviderFilterBar({
   selectedFilter,
   onSelect,
   colors,
+  isOpen,
 }: {
   providers: Provider[]
   selectedFilter: ModelFilter
   onSelect: (filter: ModelFilter) => void
   colors: ReturnType<typeof useColors>
+  isOpen: boolean
 }) {
+  const listRef = useRef<NativeFlatList<ModelFilter>>(null)
+  const restoreTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([])
+  const wasOpenRef = useRef(false)
+  const filterItems = useMemo<ModelFilter[]>(
+    () => ['favorites', ...providers.map((provider) => provider.id)],
+    [providers],
+  )
+  const selectedIndex = useMemo(
+    () => Math.max(filterItems.indexOf(selectedFilter), 0),
+    [filterItems, selectedFilter],
+  )
+
+  const clearRestoreTimers = useCallback(() => {
+    restoreTimersRef.current.forEach((timer) => clearTimeout(timer))
+    restoreTimersRef.current = []
+  }, [])
+
+  const scrollSelectedIntoView = useCallback((animated: boolean) => {
+    if (!listRef.current) return
+
+    listRef.current.scrollToIndex({
+      index: selectedIndex,
+      animated,
+      viewPosition: 0.5,
+    })
+    clearRestoreTimers()
+  }, [clearRestoreTimers, selectedIndex])
+
+  const handleScrollToIndexFailed = useCallback(
+    ({ averageItemLength, index }: { averageItemLength: number; index: number }) => {
+      listRef.current?.scrollToOffset({
+        offset: Math.max(averageItemLength * index - 32, 0),
+        animated: false,
+      })
+
+      const timer = setTimeout(() => {
+        scrollSelectedIntoView(true)
+      }, 50)
+
+      restoreTimersRef.current.push(timer)
+    },
+    [scrollSelectedIntoView],
+  )
+
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      clearRestoreTimers()
+
+      const timer = setTimeout(() => {
+        scrollSelectedIntoView(true)
+      }, 80)
+
+      restoreTimersRef.current.push(timer)
+
+      wasOpenRef.current = true
+    }
+
+    if (!isOpen) {
+      wasOpenRef.current = false
+      clearRestoreTimers()
+    }
+
+    return clearRestoreTimers
+  }, [clearRestoreTimers, isOpen, scrollSelectedIntoView])
+
   return (
-    <ScrollView
+    <GestureHandlerFlatList
+      ref={listRef}
+      data={filterItems}
       horizontal
       showsHorizontalScrollIndicator={false}
       nestedScrollEnabled
       directionalLockEnabled
       keyboardShouldPersistTaps='handled'
+      initialNumToRender={filterItems.length}
+      maxToRenderPerBatch={filterItems.length}
+      windowSize={filterItems.length + 1}
+      removeClippedSubviews={false}
+      onScrollToIndexFailed={handleScrollToIndexFailed}
+      keyExtractor={(item) => item}
       contentContainerStyle={{ paddingHorizontal: 16, gap: 6, paddingVertical: 2 }}
-    >
-      <Pressable
-        onPress={() => {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-          onSelect('favorites')
-        }}
-        className='h-9 flex-row items-center gap-1.5 rounded-xl px-3'
-        style={{
-          backgroundColor: selectedFilter === 'favorites' ? `${colors.primary}18` : colors.muted,
-          borderWidth: selectedFilter === 'favorites' ? 1 : 0,
-          borderColor: `${colors.primary}30`,
-        }}
-      >
-        <Ionicons
-          name={selectedFilter === 'favorites' ? 'star' : 'star-outline'}
-          size={14}
-          color={selectedFilter === 'favorites' ? '#f59e0b' : colors.mutedForeground}
-        />
-        <Text
-          className='text-xs font-medium'
-          style={{
-            color: selectedFilter === 'favorites' ? colors.foreground : colors.mutedForeground,
-          }}
-        >
-          Favorites
-        </Text>
-      </Pressable>
+      renderItem={({ item }) => {
+        const isFavorites = item === 'favorites'
+        const isSelected = selectedFilter === item
+        const provider = providers.find((entry) => entry.id === item)
 
-      {providers.map((provider) => (
-        <Pressable
-          key={provider.id}
-          onPress={() => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-            onSelect(provider.id)
-          }}
-          className='h-9 flex-row items-center gap-1.5 rounded-xl px-3'
-          style={{
-            backgroundColor: selectedFilter === provider.id ? `${colors.primary}18` : colors.muted,
-            borderWidth: selectedFilter === provider.id ? 1 : 0,
-            borderColor: `${colors.primary}30`,
-          }}
-        >
-          <ProviderLogo provider={provider.id} size={14} />
-          <Text
-            className='text-xs font-medium'
+        return (
+          <Pressable
+            onPress={() => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+              onSelect(item)
+            }}
+            className='h-9 flex-row items-center gap-1.5 rounded-xl px-3'
             style={{
-              color: selectedFilter === provider.id ? colors.foreground : colors.mutedForeground,
+              backgroundColor: isSelected ? `${colors.primary}18` : colors.muted,
+              borderWidth: isSelected ? 1 : 0,
+              borderColor: `${colors.primary}30`,
             }}
           >
-            {provider.name}
-          </Text>
-        </Pressable>
-      ))}
-    </ScrollView>
+            {isFavorites ? (
+              <Ionicons
+                name={isSelected ? 'star' : 'star-outline'}
+                size={14}
+                color={isSelected ? '#f59e0b' : colors.mutedForeground}
+              />
+            ) : (
+              <ProviderLogo provider={provider?.id ?? item} size={14} />
+            )}
+            <Text
+              className='text-xs font-medium'
+              style={{
+                color: isSelected ? colors.foreground : colors.mutedForeground,
+              }}
+            >
+              {isFavorites ? 'Favorites' : provider?.name ?? item}
+            </Text>
+          </Pressable>
+        )
+      }}
+    />
   )
 }
 
@@ -525,6 +596,7 @@ function SelectorListHeader({
   onSelectFilter,
   sectionLabel,
   colors,
+  isOpen,
 }: {
   model: Model
   providers: Provider[]
@@ -539,6 +611,7 @@ function SelectorListHeader({
   onSelectFilter: (filter: ModelFilter) => void
   sectionLabel: string
   colors: ReturnType<typeof useColors>
+  isOpen: boolean
 }) {
   return (
     <>
@@ -671,6 +744,7 @@ function SelectorListHeader({
             selectedFilter={selectedFilter}
             onSelect={onSelectFilter}
             colors={colors}
+            isOpen={isOpen}
           />
         </View>
       ) : null}
@@ -712,6 +786,7 @@ export default function ModelSelector({
   const selectorSheetRef = useRef<BottomSheetModal>(null)
 
   const [isOpen, setIsOpen] = useState(false)
+  const [selectorSheetIndex, setSelectorSheetIndex] = useState(-1)
   const [search, setSearch] = useState('')
   const [selectedFilter, setSelectedFilter] = useState<ModelFilter>(() =>
     getStoredFilter(providers),
@@ -737,6 +812,7 @@ export default function ModelSelector({
 
   useEffect(() => {
     if (
+      providers.length > 0 &&
       selectedFilter !== 'favorites' &&
       !providers.some((provider) => provider.id === selectedFilter)
     ) {
@@ -911,6 +987,7 @@ export default function ModelSelector({
         onSelectFilter={handleSelectFilter}
         sectionLabel={sectionLabel}
         colors={colors}
+        isOpen={selectorSheetIndex >= 0}
       />
     ),
     [
@@ -924,6 +1001,7 @@ export default function ModelSelector({
       providers,
       search,
       sectionLabel,
+      selectorSheetIndex,
       selectedFilter,
     ],
   )
@@ -1029,7 +1107,11 @@ export default function ModelSelector({
         snapPoints={snapPoints}
         enableDynamicSizing={false}
         enablePanDownToClose
-        onDismiss={() => setIsOpen(false)}
+        onChange={(index) => setSelectorSheetIndex(index)}
+        onDismiss={() => {
+          setSelectorSheetIndex(-1)
+          setIsOpen(false)
+        }}
         backdropComponent={renderBackdrop}
         backgroundStyle={{
           backgroundColor: colors.card,
