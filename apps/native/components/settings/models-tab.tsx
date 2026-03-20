@@ -14,10 +14,10 @@ import {
 
 import { useAppTheme } from '@/contexts/app-theme-context'
 import {
-  MODELS,
   formatModelPricing,
   getProviderIconUrl,
   type Model,
+  useModelCatalog,
 } from '@/lib/models'
 import { useColors } from '@/lib/use-colors'
 
@@ -161,6 +161,7 @@ function ModelRow({
 }
 
 export default function ModelsTab() {
+  const { models: catalogModels } = useModelCatalog()
   const colors = useColors()
   const { isDark } = useAppTheme()
   const currentTheme: 'light' | 'dark' = isDark ? 'dark' : 'light'
@@ -222,7 +223,9 @@ export default function ModelsTab() {
   )
 
   const filteredModels = useMemo(() => {
-    let models = showLegacy ? MODELS : MODELS.filter((m) => !m.isLegacy)
+    let models = showLegacy
+      ? catalogModels
+      : catalogModels.filter((entry) => !entry.isLegacy)
     if (filter === 'favorites')
       models = models.filter((m) => favoriteIdSet.has(m.id))
     else if (filter === 'non-favorites')
@@ -239,7 +242,7 @@ export default function ModelsTab() {
     }
 
     return models
-  }, [favoriteIdSet, search, filter, showLegacy])
+  }, [catalogModels, favoriteIdSet, filter, search, showLegacy])
 
   const renderItem = useCallback(
     ({ item, index }: { item: Model; index: number }) => (

@@ -11,6 +11,7 @@ import { AppThemeProvider } from '@/contexts/app-theme-context'
 import { authClient } from '@/lib/auth-client'
 import { ActivityIndicator, View } from 'react-native'
 import { useColors } from '@/lib/use-colors'
+import ModelCatalogBootstrap from '@/components/model-catalog-bootstrap'
 
 export const unstable_settings = {
   initialRouteName: '(auth)',
@@ -59,17 +60,19 @@ function StackLayout() {
 export default function Layout() {
   return (
     <ConvexBetterAuthProvider client={convex} authClient={authClient}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <KeyboardProvider>
-          <AppThemeProvider>
-            <BottomSheetModalProvider>
-              <HeroUINativeProvider>
-                <StackLayout />
-              </HeroUINativeProvider>
-            </BottomSheetModalProvider>
-          </AppThemeProvider>
-        </KeyboardProvider>
-      </GestureHandlerRootView>
+      <ModelCatalogBootstrap>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <KeyboardProvider>
+            <AppThemeProvider>
+              <BottomSheetModalProvider>
+                <HeroUINativeProvider>
+                  <StackLayout />
+                </HeroUINativeProvider>
+              </BottomSheetModalProvider>
+            </AppThemeProvider>
+          </KeyboardProvider>
+        </GestureHandlerRootView>
+      </ModelCatalogBootstrap>
     </ConvexBetterAuthProvider>
   )
 }

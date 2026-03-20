@@ -6,6 +6,7 @@ import { ConvexReactClient } from "convex/react";
 import ReactDOM from "react-dom/client";
 
 import { authClient } from "@/lib/auth-client";
+import ModelCatalogBootstrap from "@/components/model-catalog-bootstrap";
 
 import { routeTree } from "./routeTree.gen";
 const convex = new ConvexReactClient(env.VITE_CONVEX_URL);
@@ -17,7 +18,7 @@ const router = createRouter({
   Wrap: function WrapComponent({ children }: { children: React.ReactNode }) {
     return (
       <ConvexBetterAuthProvider client={convex} authClient={authClient}>
-        {children}
+        <ModelCatalogBootstrap>{children}</ModelCatalogBootstrap>
       </ConvexBetterAuthProvider>
     );
   },

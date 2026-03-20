@@ -33,15 +33,14 @@ import { useLocalStorage } from "@/hooks/use-local-storage";
 import {
   formatModelPricing,
   getProviderIconUrl,
-  MODELS,
-  PROVIDERS,
   modelSupportsAttachments,
+  useModelCatalog,
   type Model,
   type ModelCapability,
 } from "@/lib/models";
 import type { ComposerAttachment, DraftAttachment } from "@/lib/attachments";
 
-type ModelFilter = "favorites" | (typeof PROVIDERS)[number]["id"];
+type ModelFilter = "favorites" | string;
 
 const MODEL_SELECTOR_FILTER_STORAGE_KEY = "based-chat:model-selector-filter";
 
@@ -289,9 +288,11 @@ function ModelRow({
 }
 
 function ProviderSidebar({
+  providers,
   selectedFilter,
   onSelectFilter,
 }: {
+  providers: Array<{ id: string; name: string }>;
   selectedFilter: ModelFilter;
   onSelectFilter: (filter: ModelFilter) => void;
 }) {
@@ -326,7 +327,7 @@ function ProviderSidebar({
           </TooltipContent>
         </Tooltip>
 
-        {PROVIDERS.map((provider) => (
+        {providers.map((provider) => (
           <Tooltip key={provider.id}>
             <TooltipTrigger
               render={
@@ -364,6 +365,7 @@ export default function ModelSelector({
   onModelChange: (model: Model) => void;
   pendingAttachments?: Array<DraftAttachment | ComposerAttachment>;
 }) {
+  const { models, providers } = useModelCatalog();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedFilter, setSelectedFilter] = useLocalStorage<ModelFilter>(
@@ -373,7 +375,7 @@ export default function ModelSelector({
       parse: (storedFilter) => {
         if (
           storedFilter === "favorites" ||
-          PROVIDERS.some((provider) => provider.id === storedFilter)
+          providers.some((provider) => provider.id === storedFilter)
         ) {
           return storedFilter as ModelFilter;
         }
@@ -425,6 +427,15 @@ export default function ModelSelector({
     return () => window.clearTimeout(timer);
   }, [armedUnfavoriteModelId]);
 
+  useEffect(() => {
+    if (
+      selectedFilter !== "favorites" &&
+      !providers.some((provider) => provider.id === selectedFilter)
+    ) {
+      setSelectedFilter("favorites");
+    }
+  }, [providers, selectedFilter, setSelectedFilter]);
+
   const activeFavoriteIds = optimisticFavoriteIds ?? favoriteModelIds ?? [];
   const favoriteIdSet = useMemo(
     () => new Set(activeFavoriteIds),
@@ -432,7 +443,7 @@ export default function ModelSelector({
   );
 
   const rankedModels = useMemo(() => {
-    return MODELS.map((entry, index) => ({
+    return models.map((entry, index) => ({
       index,
       model: entry,
       isFavorite: favoriteIdSet.has(entry.id),
@@ -443,7 +454,7 @@ export default function ModelSelector({
 
       return left.isFavorite ? -1 : 1;
     });
-  }, [favoriteIdSet]);
+  }, [favoriteIdSet, models]);
 
   const hasSearch = deferredSearch.trim().length > 0;
 
@@ -593,6 +604,7 @@ export default function ModelSelector({
 
             <div className="flex max-h-80">
               <ProviderSidebar
+                providers={providers}
                 selectedFilter={selectedFilter}
                 onSelectFilter={handleSelectFilter}
               />

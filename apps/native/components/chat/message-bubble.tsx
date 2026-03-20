@@ -17,7 +17,7 @@ import {
 import { Markdown } from 'react-native-remark'
 
 import ModelSelector from '@/components/chat/model-selector'
-import { DEFAULT_MODEL, getModelById } from '@/lib/models'
+import { getModelById, useModelCatalog } from '@/lib/models'
 import { useColors } from '@/lib/use-colors'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
@@ -395,6 +395,7 @@ function MessageBubble({
     nextModelId: string,
   ) => Promise<void> | void
 }) {
+  const { defaultModel } = useModelCatalog()
   const colors = useColors()
   const { toast } = useToast()
   const markdownStyles = useMarkdownStyles(colors)
@@ -410,11 +411,11 @@ function MessageBubble({
   const [isEditing, setIsEditing] = useState(false)
   const [editingValue, setEditingValue] = useState(message.content)
   const [editingModelId, setEditingModelId] = useState(
-    message.modelId ?? DEFAULT_MODEL.id,
+    message.modelId ?? defaultModel.id,
   )
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const modelLabel = message.modelName ?? message.modelId ?? 'Assistant'
-  const editingModel = getModelById(editingModelId) ?? DEFAULT_MODEL
+  const editingModel = getModelById(editingModelId) ?? defaultModel
   const canSaveEdit =
     !isSavingEdit &&
     (editingValue.trim().length > 0 ||
@@ -440,9 +441,9 @@ function MessageBubble({
 
   const openEdit = useCallback(() => {
     setEditingValue(message.content)
-    setEditingModelId(message.modelId ?? DEFAULT_MODEL.id)
+    setEditingModelId(message.modelId ?? defaultModel.id)
     setIsEditing(true)
-  }, [message.content, message.modelId])
+  }, [defaultModel.id, message.content, message.modelId])
 
   const handleSaveEdit = useCallback(async () => {
     if (!onSaveEdit) {

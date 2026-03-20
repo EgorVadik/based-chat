@@ -1,4 +1,7 @@
 import type { ModelMessage, UserModelMessage } from 'ai'
+import { z } from 'zod'
+
+import { readSerializedRedisConfig } from './redisConfig'
 
 type ResolvedAttachment = {
   kind: 'image' | 'file'
@@ -20,7 +23,9 @@ type UserPromptProfile = {
   bio?: string
 }
 
-const OPENROUTER_MODEL_IDS: Record<string, string> = {
+const LLMS_KEY = 'llms'
+
+const DEFAULT_OPENROUTER_MODEL_IDS: Record<string, string> = {
   'claude-opus-4-6': 'anthropic/claude-opus-4.6',
   'claude-sonnet-4-6': 'anthropic/claude-sonnet-4.6',
   'claude-haiku-4-5': 'anthropic/claude-haiku-4.5',
@@ -30,6 +35,8 @@ const OPENROUTER_MODEL_IDS: Record<string, string> = {
   'gpt-5.4': 'openai/gpt-5.4',
   'gpt-5-4': 'openai/gpt-5.4',
   'gpt-5-4-pro': 'openai/gpt-5.4-pro',
+  'gpt-5-4-mini': 'openai/gpt-5.4-mini',
+  'gpt-5-4-nano': 'openai/gpt-5.4-nano',
   'gpt-oss-20b': 'openai/gpt-oss-20b',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'gpt-4o-mini': 'openai/gpt-4o-mini',
@@ -44,7 +51,7 @@ const OPENROUTER_MODEL_IDS: Record<string, string> = {
   'gpt-5-3-instant': 'openai/gpt-5.3-chat',
   'o3-mini': 'openai/o3-mini',
   'o4-mini': 'openai/o4-mini',
-  'o3': 'openai/o3',
+  o3: 'openai/o3',
   'gpt-imagegen': 'openai/gpt-5-image',
   'gpt-imagegen-1-5': 'openai/gpt-5-image-mini',
   'gpt-4o': 'openai/gpt-4o',
@@ -95,12 +102,13 @@ const OPENROUTER_MODEL_IDS: Record<string, string> = {
   'glm-4-5-air': 'z-ai/glm-4.5-air',
   'glm-4-5': 'z-ai/glm-4.5',
   'glm-5-turbo': 'z-ai/glm-5-turbo',
+  'minimax-m2-7': 'minimax/minimax-m2.7',
   'minimax-m2-5': 'minimax/minimax-m2.5',
   'minimax-m2-1': 'minimax/minimax-m2.1',
   'minimax-m2': 'minimax/minimax-m2',
-  'healer-alpha': 'openrouter/healer-alpha',
-  'hunter-alpha': 'openrouter/hunter-alpha',
 }
+
+const openRouterModelIdsSchema = z.record(z.string(), z.string())
 
 const OPENROUTER_WEB_SEARCH_PROVIDER_OPTIONS = {
   openrouter: {
@@ -108,8 +116,14 @@ const OPENROUTER_WEB_SEARCH_PROVIDER_OPTIONS = {
   },
 } as const
 
-export function getOpenRouterModelId(modelId: string) {
-  return OPENROUTER_MODEL_IDS[modelId] ?? modelId
+export async function getOpenRouterModelId(modelId: string) {
+  const openRouterModelIds = await readSerializedRedisConfig({
+    key: LLMS_KEY,
+    schema: openRouterModelIdsSchema,
+    fallback: DEFAULT_OPENROUTER_MODEL_IDS,
+  })
+
+  return openRouterModelIds[modelId] ?? modelId
 }
 
 export function getOpenRouterChatProviderOptions({

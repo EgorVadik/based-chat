@@ -19,10 +19,10 @@ import { appStorage } from '@/lib/mmkv'
 import {
   formatModelPricing,
   getProviderIconUrl,
-  MODELS,
-  PROVIDERS,
   type Model,
   type ModelCapability,
+  type Provider,
+  useModelCatalog,
 } from '@/lib/models'
 import { useColors } from '@/lib/use-colors'
 
@@ -37,16 +37,16 @@ const CAPABILITY_META: Record<ModelCapability, { icon: keyof typeof Ionicons.gly
   'image-gen': { icon: 'image-outline', label: 'Image gen' },
 }
 
-function getStoredFilter(): ModelFilter {
+function getStoredFilter(providers: Provider[]): ModelFilter {
   const val = appStorage.getString(FILTER_STORAGE_KEY)
-  if (val === 'favorites' || PROVIDERS.some((provider) => provider.id === val)) {
+  if (val === 'favorites' || providers.some((provider) => provider.id === val)) {
     return val as ModelFilter
   }
   return 'favorites'
 }
 
-function getProviderDisplayName(providerId: string) {
-  return PROVIDERS.find((provider) => provider.id === providerId)?.name ?? providerId
+function getProviderDisplayName(providerId: string, providers: Provider[]) {
+  return providers.find((provider) => provider.id === providerId)?.name ?? providerId
 }
 
 function ProviderLogo({ provider, size = 18 }: { provider: string; size?: number }) {
@@ -108,11 +108,13 @@ function ModelDetailSheet({
   model,
   isOpen,
   onClose,
+  providers,
   colors,
 }: {
   model: Model | null
   isOpen: boolean
   onClose: () => void
+  providers: Provider[]
   colors: ReturnType<typeof useColors>
 }) {
   const sheetRef = useRef<BottomSheetModal>(null)
@@ -182,7 +184,7 @@ function ModelDetailSheet({
               className='text-xs mt-0.5'
               style={{ color: colors.mutedForeground }}
             >
-              {getProviderDisplayName(model.provider)}
+              {getProviderDisplayName(model.provider, providers)}
             </Text>
           </View>
         </View>
@@ -235,10 +237,12 @@ function ModelDetailSheet({
 }
 
 function ProviderFilterBar({
+  providers,
   selectedFilter,
   onSelect,
   colors,
 }: {
+  providers: Provider[]
   selectedFilter: ModelFilter
   onSelect: (filter: ModelFilter) => void
   colors: ReturnType<typeof useColors>
@@ -279,7 +283,7 @@ function ProviderFilterBar({
         </Text>
       </Pressable>
 
-      {PROVIDERS.map((provider) => (
+      {providers.map((provider) => (
         <Pressable
           key={provider.id}
           onPress={() => {
@@ -310,6 +314,7 @@ function ProviderFilterBar({
 
 function ModelRow({
   model,
+  providers,
   isFavorite,
   isSelected,
   onSelect,
@@ -319,6 +324,7 @@ function ModelRow({
   colors,
 }: {
   model: Model
+  providers: Provider[]
   isFavorite: boolean
   isSelected: boolean
   onSelect: (model: Model) => void
@@ -327,7 +333,7 @@ function ModelRow({
   isFavoritePending: boolean
   colors: ReturnType<typeof useColors>
 }) {
-  const providerLabel = getProviderDisplayName(model.provider)
+  const providerLabel = getProviderDisplayName(model.provider, providers)
   const visibleCapabilities = model.capabilities.slice(0, 3)
   const remainingCapabilities = model.capabilities.length - visibleCapabilities.length
 
@@ -507,6 +513,7 @@ type ListItem =
 
 function SelectorListHeader({
   model,
+  providers,
   providerLabel,
   favoriteIdSet,
   search,
@@ -520,6 +527,7 @@ function SelectorListHeader({
   colors,
 }: {
   model: Model
+  providers: Provider[]
   providerLabel: string
   favoriteIdSet: Set<string>
   search: string
@@ -659,6 +667,7 @@ function SelectorListHeader({
             </Text>
           </View>
           <ProviderFilterBar
+            providers={providers}
             selectedFilter={selectedFilter}
             onSelect={onSelectFilter}
             colors={colors}
@@ -695,15 +704,18 @@ export default function ModelSelector({
   onModelChange: (model: Model) => void
   placement?: 'input' | 'header'
 }) {
+  const { models, providers } = useModelCatalog()
   const colors = useColors()
   const { toast } = useToast()
-  const providerLabel = getProviderDisplayName(model.provider)
+  const providerLabel = getProviderDisplayName(model.provider, providers)
   const isHeaderPlacement = placement === 'header'
   const selectorSheetRef = useRef<BottomSheetModal>(null)
 
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [selectedFilter, setSelectedFilter] = useState<ModelFilter>(getStoredFilter)
+  const [selectedFilter, setSelectedFilter] = useState<ModelFilter>(() =>
+    getStoredFilter(providers),
+  )
   const [showLegacy, setShowLegacy] = useState(false)
   const [infoModel, setInfoModel] = useState<Model | null>(null)
   const [isInfoOpen, setIsInfoOpen] = useState(false)
@@ -724,6 +736,16 @@ export default function ModelSelector({
   }, [favoriteModelIds])
 
   useEffect(() => {
+    if (
+      selectedFilter !== 'favorites' &&
+      !providers.some((provider) => provider.id === selectedFilter)
+    ) {
+      setSelectedFilter('favorites')
+      appStorage.set(FILTER_STORAGE_KEY, 'favorites')
+    }
+  }, [providers, selectedFilter])
+
+  useEffect(() => {
     if (isOpen) {
       selectorSheetRef.current?.present()
       setSearch('')
@@ -737,7 +759,7 @@ export default function ModelSelector({
   const favoriteIdSet = useMemo(() => new Set(activeFavoriteIds), [activeFavoriteIds])
 
   const rankedModels = useMemo(() => {
-    return MODELS.map((entry, index) => ({
+    return models.map((entry, index) => ({
       index,
       model: entry,
       isFavorite: favoriteIdSet.has(entry.id),
@@ -745,7 +767,7 @@ export default function ModelSelector({
       if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1
       return a.index - b.index
     })
-  }, [favoriteIdSet])
+  }, [favoriteIdSet, models])
 
   const hasSearch = deferredSearch.trim().length > 0
 
@@ -871,12 +893,13 @@ export default function ModelSelector({
       ? 'Matching models'
       : selectedFilter === 'favorites'
         ? 'Favorites'
-        : getProviderDisplayName(selectedFilter)
+        : getProviderDisplayName(selectedFilter, providers)
 
   const headerComponent = useMemo(
     () => (
       <SelectorListHeader
         model={model}
+        providers={providers}
         providerLabel={providerLabel}
         favoriteIdSet={favoriteIdSet}
         search={search}
@@ -898,6 +921,7 @@ export default function ModelSelector({
       hasSearch,
       model,
       providerLabel,
+      providers,
       search,
       sectionLabel,
       selectedFilter,
@@ -935,6 +959,7 @@ export default function ModelSelector({
       return (
         <ModelRow
           model={item.model}
+          providers={providers}
           isFavorite={item.isFavorite}
           isSelected={item.model.id === model.id}
           onSelect={handleSelect}
@@ -945,7 +970,16 @@ export default function ModelSelector({
         />
       )
     },
-    [colors, handleSelect, handleShowInfo, handleToggleFavorite, model.id, pendingFavoriteIds, showLegacy],
+    [
+      colors,
+      handleSelect,
+      handleShowInfo,
+      handleToggleFavorite,
+      model.id,
+      pendingFavoriteIds,
+      providers,
+      showLegacy,
+    ],
   )
 
   const keyExtractor = useCallback((item: ListItem) => item.key, [])
@@ -1040,6 +1074,7 @@ export default function ModelSelector({
         model={infoModel}
         isOpen={isInfoOpen}
         onClose={() => setIsInfoOpen(false)}
+        providers={providers}
         colors={colors}
       />
     </>

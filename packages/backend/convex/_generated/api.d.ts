@@ -14,6 +14,8 @@ import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
 import type * as llm from "../llm.js";
 import type * as messages from "../messages.js";
+import type * as modelCatalog from "../modelCatalog.js";
+import type * as redisConfig from "../redisConfig.js";
 import type * as threads from "../threads.js";
 
 import type {
@@ -29,6 +31,8 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   llm: typeof llm;
   messages: typeof messages;
+  modelCatalog: typeof modelCatalog;
+  redisConfig: typeof redisConfig;
   threads: typeof threads;
 }>;
 

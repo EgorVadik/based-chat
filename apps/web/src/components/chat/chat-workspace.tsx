@@ -29,7 +29,7 @@ import Loader from '@/components/loader'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { getStoredOpenRouterApiKey } from '@/lib/api-key-storage'
 import { toChatMessage, type ChatMessage } from '@/lib/chat'
-import { DEFAULT_MODEL, getModelById, type Model } from '@/lib/models'
+import { getModelById, useModelCatalog, type Model } from '@/lib/models'
 import { abortPersistentTextStream } from '@/lib/persistent-text-stream'
 import type { ThreadSummary } from '@/lib/threads'
 import {
@@ -377,11 +377,12 @@ export default function ChatWorkspace({
   >(() => chatWorkspaceSnapshot.messageCache)
   const [temporaryChatState, setTemporaryChatState] =
     useState<TemporaryChatState>(loadTemporaryChatState)
+  const { defaultModel } = useModelCatalog()
   const [selectedModel, setSelectedModel] = useLocalStorage<Model>(
     SELECTED_MODEL_STORAGE_KEY,
-    DEFAULT_MODEL,
+    defaultModel,
     {
-      parse: (storedModelId) => getModelById(storedModelId) ?? DEFAULT_MODEL,
+      parse: (storedModelId) => getModelById(storedModelId) ?? defaultModel,
       serialize: (model) => model.id,
     },
   )
@@ -415,6 +416,14 @@ export default function ChatWorkspace({
       setTransientThread(null)
     }
   }, [routeThreadId])
+
+  useEffect(() => {
+    const nextSelectedModel = getModelById(selectedModel.id) ?? defaultModel
+
+    if (nextSelectedModel !== selectedModel) {
+      setSelectedModel(nextSelectedModel)
+    }
+  }, [defaultModel, selectedModel, setSelectedModel])
 
   useEffect(() => {
     persistTemporaryChatState(temporaryChatState)
@@ -882,7 +891,7 @@ export default function ChatWorkspace({
     const importResult = (await importTemporaryThread({
       messages: temporaryChatState.messages.map((message) => ({
         role: message.role,
-        modelId: message.modelId ?? DEFAULT_MODEL.id,
+        modelId: message.modelId ?? defaultModel.id,
         content: message.content,
         reasoningText: message.reasoningText,
         sources: message.sources.length > 0 ? message.sources : undefined,
@@ -936,6 +945,7 @@ export default function ChatWorkspace({
     })
     toast.success('Temporary chat saved to your history.')
   }, [
+    defaultModel.id,
     generateThreadTitle,
     importTemporaryThread,
     navigate,

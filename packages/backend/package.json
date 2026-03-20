@@ -9,6 +9,8 @@
     "dev:setup": "convex dev --configure --until-success"
   },
   "dependencies": {
+    "@based-chat/lib": "workspace:*",
+    "@upstash/redis": "^1.35.6",
     "@better-auth/expo": "catalog:",
     "@convex-dev/better-auth": "catalog:",
     "@convex-dev/persistent-text-streaming": "^0.3.0",

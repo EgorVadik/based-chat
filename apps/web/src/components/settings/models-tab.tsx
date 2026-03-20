@@ -24,9 +24,9 @@ import { toast } from "sonner";
 
 import {
   formatModelPricing,
-  MODELS,
   type Model,
   type ModelCapability,
+  useModelCatalog,
 } from "@/lib/models";
 
 const CAPABILITY_META: Record<
@@ -48,6 +48,7 @@ const FILTER_LABELS: Record<FilterMode, string> = {
 };
 
 export default function ModelsTab() {
+  const { models } = useModelCatalog();
   const favoriteModelIds = useQuery(api.favoriteModels.list, {});
   const toggleFavorite = useMutation(api.favoriteModels.toggle);
   const [optimisticFavoriteIds, setOptimisticFavoriteIds] = useState<string[] | null>(
@@ -95,17 +96,17 @@ export default function ModelsTab() {
   };
 
   const filteredModels = useMemo(() => {
-    let models = MODELS;
+    let visibleModels = models;
 
     if (filter === "favorites") {
-      models = models.filter((m) => favoriteIdSet.has(m.id));
+      visibleModels = visibleModels.filter((m) => favoriteIdSet.has(m.id));
     } else if (filter === "non-favorites") {
-      models = models.filter((m) => !favoriteIdSet.has(m.id));
+      visibleModels = visibleModels.filter((m) => !favoriteIdSet.has(m.id));
     }
 
     if (search.trim()) {
       const query = search.toLowerCase();
-      models = models.filter(
+      visibleModels = visibleModels.filter(
         (m) =>
           m.name.toLowerCase().includes(query) ||
           m.provider.toLowerCase().includes(query) ||
@@ -113,8 +114,8 @@ export default function ModelsTab() {
       );
     }
 
-    return models;
-  }, [favoriteIdSet, search, filter]);
+    return visibleModels;
+  }, [favoriteIdSet, filter, models, search]);
 
   return (
     <div className="space-y-6">

@@ -17,7 +17,23 @@ export type Model = {
   isLegacy?: boolean
 }
 
-export const PROVIDERS = [
+export type Provider = {
+  id: string
+  name: string
+}
+
+export type ModelCatalog = {
+  models: Model[]
+  providers: Provider[]
+  providerIconIds: Record<string, string>
+}
+
+export type ModelCatalogSnapshot = ModelCatalog & {
+  version: number
+  defaultModel: Model
+}
+
+const DEFAULT_PROVIDERS: Provider[] = [
   { id: 'Anthropic', name: 'Anthropic' },
   { id: 'OpenAI', name: 'OpenAI' },
   { id: 'Google', name: 'Google' },
@@ -28,13 +44,12 @@ export const PROVIDERS = [
   { id: 'Moonshot', name: 'Moonshot' },
   { id: 'Z.ai', name: 'Z.ai' },
   { id: 'MiniMax', name: 'MiniMax' },
-  { id: 'Stealth', name: 'Stealth' },
 ] as const
 
 export const LOBE_ICON_CDN_BASE =
   'https://unpkg.com/@lobehub/icons-static-png@latest'
 
-export const PROVIDER_ICON_IDS: Record<string, string> = {
+const DEFAULT_PROVIDER_ICON_IDS: Record<string, string> = {
   Anthropic: 'anthropic',
   OpenAI: 'openai',
   Google: 'gemini',
@@ -43,9 +58,8 @@ export const PROVIDER_ICON_IDS: Record<string, string> = {
   xAI: 'xai',
   Qwen: 'qwen',
   Moonshot: 'moonshot',
-  'Z.ai': 'zhipu',
+  'Z.ai': 'zai',
   MiniMax: 'minimax',
-  Stealth: 'openrouter',
 }
 
 /**
@@ -63,7 +77,7 @@ export function getProviderIconUrl(
   return `${LOBE_ICON_CDN_BASE}/${variant}/${iconId}.png`
 }
 
-export const MODELS: Model[] = [
+const DEFAULT_MODELS: Model[] = [
   {
     id: 'claude-sonnet-4-6',
     name: 'Claude Sonnet 4.6',
@@ -137,6 +151,26 @@ export const MODELS: Model[] = [
     description: 'Fast GPT-5.3 chat tier with image and PDF support',
     pricing: { input: 1.75, output: 14 },
     capabilities: ['image', 'pdf'],
+  },
+  {
+    id: 'gpt-5-4-mini',
+    name: 'GPT 5.4 Mini',
+    provider: 'OpenAI',
+    description:
+      'Faster, more efficient GPT-5.4 tier for high-throughput reasoning, coding, and agent workflows',
+    pricing: { input: 0.75, output: 4.5 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'gpt-5-4-nano',
+    name: 'GPT 5.4 Nano',
+    provider: 'OpenAI',
+    description:
+      'Most lightweight GPT-5.4 variant for speed-critical, high-volume tasks like classification, extraction, and sub-agents',
+    pricing: { input: 0.2, output: 1.25 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
   },
   {
     id: 'gpt-5-mini',
@@ -630,6 +664,16 @@ export const MODELS: Model[] = [
     isLegacy: true,
   },
   {
+    id: 'minimax-m2-7',
+    name: 'MiniMax M2.7',
+    provider: 'MiniMax',
+    description:
+      'Next-gen agentic productivity model for autonomous workflows, debugging, analysis, and document generation',
+    pricing: { input: 0.3, output: 1.2 },
+    capabilities: ['reasoning'],
+    badge: 'NEW',
+  },
+  {
     id: 'minimax-m2-5',
     name: 'MiniMax M2.5',
     provider: 'MiniMax',
@@ -654,27 +698,103 @@ export const MODELS: Model[] = [
     capabilities: ['reasoning'],
     isLegacy: true,
   },
-  {
-    id: 'hunter-alpha',
-    name: 'Hunter Alpha',
-    provider: 'Stealth',
-    description: 'Stealth model optimized for coding and agents',
-    pricing: { input: 0, output: 0 },
-    capabilities: [],
-    badge: 'NEW',
-  },
-  {
-    id: 'healer-alpha',
-    name: 'Healer Alpha',
-    provider: 'Stealth',
-    description: 'Stealth model for balanced reasoning and reliability',
-    pricing: { input: 0, output: 0 },
-    capabilities: ['image', 'reasoning'],
-    badge: 'NEW',
-  },
 ]
 
-export const DEFAULT_MODEL = MODELS[0]!
+function cloneModel(model: Model): Model {
+  return {
+    ...model,
+    pricing: { ...model.pricing },
+    capabilities: [...model.capabilities],
+  }
+}
+
+function cloneModels(models: Model[]) {
+  return models.map(cloneModel)
+}
+
+function cloneProviders(providers: Provider[]) {
+  return providers.map((provider) => ({ ...provider }))
+}
+
+function cloneProviderIconIds(providerIconIds: Record<string, string>) {
+  return { ...providerIconIds }
+}
+
+let modelCatalogVersion = 0
+const modelCatalogListeners = new Set<() => void>()
+
+export let PROVIDERS: Provider[] = cloneProviders(DEFAULT_PROVIDERS)
+export let PROVIDER_ICON_IDS: Record<string, string> = cloneProviderIconIds(
+  DEFAULT_PROVIDER_ICON_IDS,
+)
+export let MODELS: Model[] = cloneModels(DEFAULT_MODELS)
+export let DEFAULT_MODEL = MODELS[0]!
+let modelCatalogSnapshot: ModelCatalogSnapshot = {
+  version: modelCatalogVersion,
+  models: MODELS,
+  providers: PROVIDERS,
+  providerIconIds: PROVIDER_ICON_IDS,
+  defaultModel: DEFAULT_MODEL,
+}
+
+function emitModelCatalogChange() {
+  modelCatalogVersion += 1
+  modelCatalogSnapshot = {
+    version: modelCatalogVersion,
+    models: MODELS,
+    providers: PROVIDERS,
+    providerIconIds: PROVIDER_ICON_IDS,
+    defaultModel: DEFAULT_MODEL,
+  }
+  for (const listener of modelCatalogListeners) {
+    listener()
+  }
+}
+
+export function getStaticModelCatalog(): ModelCatalog {
+  return {
+    models: cloneModels(DEFAULT_MODELS),
+    providers: cloneProviders(DEFAULT_PROVIDERS),
+    providerIconIds: cloneProviderIconIds(DEFAULT_PROVIDER_ICON_IDS),
+  }
+}
+
+export function getModelCatalogSnapshot(): ModelCatalogSnapshot {
+  return modelCatalogSnapshot
+}
+
+export function subscribeToModelCatalog(listener: () => void) {
+  modelCatalogListeners.add(listener)
+  return () => {
+    modelCatalogListeners.delete(listener)
+  }
+}
+
+export function applyModelCatalog(catalog: ModelCatalog) {
+  const fallbackCatalog = getStaticModelCatalog()
+  const nextModels =
+    catalog.models.length > 0
+      ? cloneModels(catalog.models)
+      : fallbackCatalog.models
+  const nextProviders =
+    catalog.providers.length > 0
+      ? cloneProviders(catalog.providers)
+      : fallbackCatalog.providers
+
+  MODELS = nextModels
+  PROVIDERS = nextProviders
+  PROVIDER_ICON_IDS =
+    Object.keys(catalog.providerIconIds).length > 0
+      ? cloneProviderIconIds(catalog.providerIconIds)
+      : fallbackCatalog.providerIconIds
+  DEFAULT_MODEL = MODELS[0] ?? fallbackCatalog.models[0]!
+
+  emitModelCatalogChange()
+}
+
+export function resetModelCatalog() {
+  applyModelCatalog(getStaticModelCatalog())
+}
 
 export function formatUsdPerMillionTokens(amount: number) {
   return `$${new Intl.NumberFormat('en-US', {

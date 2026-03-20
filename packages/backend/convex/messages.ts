@@ -1866,7 +1866,7 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       request,
     )
   }
-  const modelId = getOpenRouterModelId(generationContext.modelId)
+  const modelId = await getOpenRouterModelId(generationContext.modelId)
   let openrouter: ReturnType<typeof createOpenRouter>
   try {
     openrouter = getOpenRouter(requestApiKey)
@@ -2354,7 +2354,7 @@ export const streamTemporaryAssistantReply = httpAction(
       })),
     ),
   )
-    const modelId = getOpenRouterModelId(payload.modelId)
+    const modelId = await getOpenRouterModelId(payload.modelId)
     let openrouter: ReturnType<typeof createOpenRouter>
     try {
       openrouter = getOpenRouter(requestApiKey)
