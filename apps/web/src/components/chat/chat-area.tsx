@@ -221,7 +221,7 @@ export default function ChatArea({
     nextModel: Model,
     attachments: ComposerAttachment[],
   ) => void | Promise<void>;
-  onRetryMessage: (message: ChatMessage) => void | Promise<void>;
+  onRetryMessage: (message: ChatMessage, model?: Model) => void | Promise<void>;
   onAbortStreaming: () => void;
   onStartTemporaryChat: () => void;
   isStreaming: boolean;
@@ -378,7 +378,7 @@ export default function ChatArea({
                   onStreamStatusChange={(status) =>
                     onMessageStreamStatusChange(message.threadId, message.id, status)
                   }
-                  onRetry={() => void onRetryMessage(message)}
+                  onRetry={(model) => void onRetryMessage(message, model)}
                   onEdit={
                     message.role === "user"
                       ? () => {

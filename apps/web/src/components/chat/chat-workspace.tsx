@@ -1756,8 +1756,9 @@ export default function ChatWorkspace({
   )
 
   const handleRetryMessage = useCallback(
-    async (message: ChatMessage) => {
+    async (message: ChatMessage, overrideModel?: Model) => {
       const retryModel =
+        overrideModel ??
         message.model ??
         (message.modelId ? getModelById(message.modelId) : undefined) ??
         currentModel

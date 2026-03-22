@@ -1,5 +1,15 @@
 import { api } from '@based-chat/backend/convex/_generated/api'
 import { Button } from '@based-chat/ui/components/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@based-chat/ui/components/dropdown-menu'
 import { Skeleton } from '@based-chat/ui/components/skeleton'
 import { Textarea } from '@based-chat/ui/components/textarea'
 import {
@@ -9,6 +19,7 @@ import {
 } from '@based-chat/ui/components/tooltip'
 import { cn } from '@based-chat/ui/lib/utils'
 import {
+  Archive,
   ArrowUp,
   Brain,
   ChevronDown,
@@ -23,6 +34,7 @@ import {
   Paperclip,
   RotateCcw,
   Sparkles,
+  Star,
   X,
   Zap,
 } from 'lucide-react'
@@ -47,11 +59,14 @@ import { usePersistentTextStream } from '@/lib/persistent-text-stream'
 import type { ChatMessage, ChatMessageSource } from '@/lib/chat'
 import {
   getModelAttachmentInputAccept,
+  getProviderIconUrl,
   modelCanAcceptAttachments,
   modelSupportsAttachment,
   modelSupportsImageGeneration,
+  useModelCatalog,
   type Model,
 } from '@/lib/models'
+import { useTheme } from '@/components/theme-provider'
 
 import ChatAttachmentStrip from './chat-attachment-strip'
 import ChatAttachmentDialog from './chat-attachment-dialog'
@@ -437,6 +452,181 @@ function ImageGenerationSkeleton() {
   )
 }
 
+function RetryProviderLogo({
+  provider,
+  className,
+}: {
+  provider: string
+  className?: string
+}) {
+  const { resolvedTheme } = useTheme()
+  const iconUrl = getProviderIconUrl(
+    provider,
+    (resolvedTheme as 'light' | 'dark') ?? 'dark',
+  )
+
+  if (!iconUrl) {
+    return <div className={cn('size-5 shrink-0', className)} aria-hidden='true' />
+  }
+
+  return (
+    <img
+      src={iconUrl}
+      alt=''
+      aria-hidden='true'
+      draggable={false}
+      className={cn('size-5 shrink-0 select-none object-contain', className)}
+    />
+  )
+}
+
+function RetryDropdown({
+  onRetry,
+  message,
+}: {
+  onRetry: (model?: Model) => void
+  message: ChatMessage
+}) {
+  const catalog = useModelCatalog()
+
+  const favorites = useMemo(() => {
+    if (!catalog?.models) return []
+    return catalog.models.filter((m) => m.isFavorite)
+  }, [catalog?.models])
+
+  const providerGroups = useMemo(() => {
+    if (!catalog?.models || !catalog?.providers) return []
+    const currentByProvider = new Map<string, Model[]>()
+    const legacyByProvider = new Map<string, Model[]>()
+    for (const model of catalog.models) {
+      const map = model.isLegacy ? legacyByProvider : currentByProvider
+      const existing = map.get(model.provider) ?? []
+      existing.push(model)
+      map.set(model.provider, existing)
+    }
+    return catalog.providers
+      .filter(
+        (p) => currentByProvider.has(p.name) || legacyByProvider.has(p.name),
+      )
+      .map((p) => ({
+        provider: p,
+        models: currentByProvider.get(p.name) ?? [],
+        legacyModels: legacyByProvider.get(p.name) ?? [],
+      }))
+  }, [catalog?.models, catalog?.providers])
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-xs'
+                  className='rounded-full text-muted-foreground hover:text-foreground'
+                >
+                  <RotateCcw className='size-3.5' />
+                </Button>
+              }
+            />
+          }
+        />
+        <TooltipContent side='bottom'>Retry message</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent side='top' align='end' className='w-56'>
+        {/* Retry same */}
+        <DropdownMenuItem onClick={() => onRetry()}>
+          <RotateCcw className='size-4 text-primary' />
+          <span>Retry same</span>
+        </DropdownMenuItem>
+
+        {/* Separator with label */}
+        <div className='flex items-center gap-3 px-2 py-1.5'>
+          <div className='h-px flex-1 bg-border/60' />
+          <span className='text-[10px] text-muted-foreground/50'>or switch model</span>
+          <div className='h-px flex-1 bg-border/60' />
+        </div>
+
+        {/* Favorites submenu */}
+        {favorites.length > 0 ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Star className='size-4 text-muted-foreground/70' />
+              <span>Favorites</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+              {favorites.map((model) => (
+                <DropdownMenuItem
+                  key={model.id}
+                  onClick={() => onRetry(model)}
+                >
+                  <RetryProviderLogo provider={model.provider} className='size-4' />
+                  <span className='truncate'>{model.name}</span>
+                  {model.capabilities.includes('reasoning') ? (
+                    <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+
+        {/* Provider submenus */}
+        {providerGroups.map(({ provider, models, legacyModels }) => (
+          <DropdownMenuSub key={provider.id}>
+            <DropdownMenuSubTrigger>
+              <RetryProviderLogo provider={provider.name} className='size-4' />
+              <span>{provider.name}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+              {models.map((model) => (
+                <DropdownMenuItem
+                  key={model.id}
+                  onClick={() => onRetry(model)}
+                >
+                  <RetryProviderLogo provider={model.provider} className='size-4' />
+                  <span className='truncate'>{model.name}</span>
+                  {model.capabilities.includes('reasoning') ? (
+                    <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+              {legacyModels.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Archive className='size-4 text-muted-foreground/70' />
+                      <span>Legacy models</span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+                      {legacyModels.map((model) => (
+                        <DropdownMenuItem
+                          key={model.id}
+                          onClick={() => onRetry(model)}
+                        >
+                          <RetryProviderLogo provider={model.provider} className='size-4' />
+                          <span className='truncate'>{model.name}</span>
+                          {model.capabilities.includes('reasoning') ? (
+                            <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
+                          ) : null}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </>
+              ) : null}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function MessageBubble({
   message,
   driveStream = false,
@@ -458,7 +648,7 @@ function MessageBubble({
   driveStream?: boolean
   streamUrl: URL
   onStreamStatusChange?: (status: ChatMessage['streamStatus']) => void
-  onRetry?: () => void
+  onRetry?: (model?: Model) => void
   onEdit?: () => void
   isEditing?: boolean
   editingValue?: string
@@ -811,22 +1001,9 @@ function MessageBubble({
                 isEditing && 'hidden',
               )}
             >
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='icon-xs'
-                      onClick={onRetry}
-                      className='rounded-full text-muted-foreground hover:text-foreground'
-                    >
-                      <RotateCcw className='size-3.5' />
-                    </Button>
-                  }
-                />
-                <TooltipContent side='bottom'>Retry message</TooltipContent>
-              </Tooltip>
+              {onRetry ? (
+                <RetryDropdown onRetry={onRetry} message={message} />
+              ) : null}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -951,24 +1128,9 @@ function MessageBubble({
                     />
                     <TooltipContent side='bottom'>Copy message</TooltipContent>
                   </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          type='button'
-                          variant='ghost'
-                          size='icon-xs'
-                          onClick={onRetry}
-                          className='rounded-full text-muted-foreground hover:text-foreground'
-                        >
-                          <RotateCcw className='size-3.5' />
-                        </Button>
-                      }
-                    />
-                    <TooltipContent side='bottom'>
-                      Retry response
-                    </TooltipContent>
-                  </Tooltip>
+                  {onRetry ? (
+                    <RetryDropdown onRetry={onRetry} message={message} />
+                  ) : null}
                 </div>
                 <div className='pointer-events-none flex flex-wrap items-center gap-x-3 gap-y-2 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/message:pointer-events-auto group-hover/message:opacity-100'>
                   <div className='inline-flex items-center gap-1.5 font-medium text-foreground/90'>
