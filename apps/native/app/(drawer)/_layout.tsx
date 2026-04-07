@@ -14,7 +14,7 @@ function DrawerLayout() {
       drawerContent={() => <DrawerContent />}
       screenOptions={{
         headerShown: false,
-        drawerType: 'front',
+        drawerType: 'slide',
         keyboardDismissMode: 'on-drag',
         drawerStyle: { backgroundColor: colors.background },
       }}
@@ -45,11 +45,7 @@ function DrawerLayout() {
         options={{
           headerShown: true,
           header: () => (
-            <ScreenHeader
-              title='Settings'
-              icon='cog-outline'
-              borderless
-            />
+            <ScreenHeader title='Settings' icon='cog-outline' borderless />
           ),
         }}
       />

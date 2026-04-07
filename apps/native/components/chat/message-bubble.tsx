@@ -1,8 +1,14 @@
+import {
+  BottomSheetBackdrop,
+  BottomSheetModal,
+  BottomSheetScrollView,
+  type BottomSheetBackdropProps,
+} from '@gorhom/bottom-sheet'
 import { Ionicons } from '@expo/vector-icons'
 import * as Clipboard from 'expo-clipboard'
 import * as Haptics from 'expo-haptics'
 import { useToast } from 'heroui-native'
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import {
   Dimensions,
   Image,
@@ -16,8 +22,14 @@ import {
 } from 'react-native'
 import { Markdown } from 'react-native-remark'
 
+import { useAppTheme } from '@/contexts/app-theme-context'
 import ModelSelector from '@/components/chat/model-selector'
-import { getModelById, useModelCatalog } from '@/lib/models'
+import {
+  getModelById,
+  getProviderIconUrl,
+  useModelCatalog,
+  type Model,
+} from '@/lib/models'
 import { useColors } from '@/lib/use-colors'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
@@ -382,13 +394,322 @@ function ActionButton({
   )
 }
 
+function RetryProviderLogo({ provider, size = 18 }: { provider: string; size?: number }) {
+  const { isDark } = useAppTheme()
+  const url = getProviderIconUrl(provider, isDark ? 'dark' : 'light')
+
+  if (!url) return <View style={{ width: size, height: size }} />
+
+  return (
+    <Image
+      source={{ uri: url }}
+      style={{ width: size, height: size }}
+      resizeMode='contain'
+    />
+  )
+}
+
+function RetryBottomSheet({
+  message,
+  onRetry,
+}: {
+  message: ChatMessage
+  onRetry: (message: ChatMessage, modelId?: string) => void
+}) {
+  const bottomSheetRef = useRef<BottomSheetModal>(null)
+  const colors = useColors()
+  const catalog = useModelCatalog()
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const [showLegacy, setShowLegacy] = useState<Record<string, boolean>>({})
+
+  const favorites = useMemo(() => {
+    if (!catalog?.models) return []
+    return catalog.models.filter((m) => m.isFavorite)
+  }, [catalog?.models])
+
+  const providerGroups = useMemo(() => {
+    if (!catalog?.models || !catalog?.providers) return []
+    const currentByProvider = new Map<string, Model[]>()
+    const legacyByProvider = new Map<string, Model[]>()
+    for (const m of catalog.models) {
+      const map = m.isLegacy ? legacyByProvider : currentByProvider
+      const existing = map.get(m.provider) ?? []
+      existing.push(m)
+      map.set(m.provider, existing)
+    }
+    return catalog.providers
+      .filter(
+        (p) => currentByProvider.has(p.name) || legacyByProvider.has(p.name),
+      )
+      .map((p) => ({
+        provider: p,
+        models: currentByProvider.get(p.name) ?? [],
+        legacyModels: legacyByProvider.get(p.name) ?? [],
+      }))
+  }, [catalog?.models, catalog?.providers])
+
+  const [showFavorites, setShowFavorites] = useState(false)
+
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        pressBehavior='close'
+        opacity={0.32}
+      />
+    ),
+    [],
+  )
+
+  const open = useCallback(() => {
+    bottomSheetRef.current?.present()
+  }, [])
+
+  const close = useCallback(() => {
+    bottomSheetRef.current?.dismiss()
+    setExpandedProvider(null)
+    setShowFavorites(false)
+    setShowLegacy({})
+  }, [])
+
+  const handleSelect = useCallback(
+    (modelId?: string) => {
+      close()
+      onRetry(message, modelId)
+    },
+    [close, message, onRetry],
+  )
+
+  return (
+    <>
+      <Pressable
+        onPress={open}
+        hitSlop={8}
+        className='flex-row items-center gap-1 rounded-full px-2 py-1'
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? `${colors.muted}B3` : 'transparent',
+        })}
+      >
+        <Ionicons name='refresh-outline' size={13} color={colors.mutedForeground} />
+        <Text className='text-[11px]' style={{ color: colors.mutedForeground }}>
+          Retry
+        </Text>
+      </Pressable>
+
+      <BottomSheetModal
+        ref={bottomSheetRef}
+        enableDynamicSizing={false}
+        snapPoints={['55%']}
+        backdropComponent={renderBackdrop}
+        backgroundStyle={{ backgroundColor: colors.card }}
+        handleIndicatorStyle={{ backgroundColor: colors.mutedForeground }}
+      >
+        <BottomSheetScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 32 }}
+        >
+          {/* Retry same */}
+          <Pressable
+            onPress={() => handleSelect()}
+            className='flex-row items-center gap-3 px-5 py-3.5'
+            style={({ pressed }) => ({
+              backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+            })}
+          >
+            <Ionicons name='refresh-outline' size={18} color={colors.primary} />
+            <Text
+              className='text-sm font-medium'
+              style={{ color: colors.foreground }}
+            >
+              Retry same
+            </Text>
+          </Pressable>
+
+          {/* Separator */}
+          <View className='flex-row items-center gap-3 px-5 py-1.5'>
+            <View className='flex-1' style={{ height: 1, backgroundColor: `${colors.border}60` }} />
+            <Text className='text-[10px]' style={{ color: `${colors.mutedForeground}80` }}>
+              or switch model
+            </Text>
+            <View className='flex-1' style={{ height: 1, backgroundColor: `${colors.border}60` }} />
+          </View>
+
+          {/* Favorites */}
+          {favorites.length > 0 ? (
+            <>
+              <Pressable
+                onPress={() => setShowFavorites(!showFavorites)}
+                className='flex-row items-center gap-3 px-5 py-3'
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                })}
+              >
+                <Ionicons name='star-outline' size={18} color={colors.mutedForeground} />
+                <Text
+                  className='flex-1 text-sm font-medium'
+                  style={{ color: colors.foreground }}
+                >
+                  Favorites
+                </Text>
+                <Ionicons
+                  name={showFavorites ? 'chevron-down' : 'chevron-forward'}
+                  size={16}
+                  color={`${colors.mutedForeground}80`}
+                />
+              </Pressable>
+              {showFavorites
+                ? favorites.map((model) => (
+                    <Pressable
+                      key={model.id}
+                      onPress={() => handleSelect(model.id)}
+                      className='flex-row items-center gap-3 py-2.5 pl-12 pr-5'
+                      style={({ pressed }) => ({
+                        backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                      })}
+                    >
+                      <RetryProviderLogo provider={model.provider} size={16} />
+                      <Text
+                        className='flex-1 text-[13px]'
+                        style={{ color: colors.foreground }}
+                        numberOfLines={1}
+                      >
+                        {model.name}
+                      </Text>
+                      {model.capabilities.includes('reasoning') ? (
+                        <Ionicons name='bulb-outline' size={14} color={`${colors.mutedForeground}80`} />
+                      ) : null}
+                    </Pressable>
+                  ))
+                : null}
+            </>
+          ) : null}
+
+          {/* Providers */}
+          {providerGroups.map(({ provider, models, legacyModels: legacy }) => {
+            const isExpanded = expandedProvider === provider.id
+            const isLegacyExpanded = showLegacy[provider.id] ?? false
+            return (
+              <View key={provider.id}>
+                <Pressable
+                  onPress={() =>
+                    setExpandedProvider(isExpanded ? null : provider.id)
+                  }
+                  className='flex-row items-center gap-3 px-5 py-3'
+                  style={({ pressed }) => ({
+                    backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                  })}
+                >
+                  <RetryProviderLogo provider={provider.name} size={18} />
+                  <Text
+                    className='flex-1 text-sm font-medium'
+                    style={{ color: colors.foreground }}
+                  >
+                    {provider.name}
+                  </Text>
+                  <Ionicons
+                    name={isExpanded ? 'chevron-down' : 'chevron-forward'}
+                    size={16}
+                    color={`${colors.mutedForeground}80`}
+                  />
+                </Pressable>
+                {isExpanded ? (
+                  <>
+                    {models.map((model) => (
+                      <Pressable
+                        key={model.id}
+                        onPress={() => handleSelect(model.id)}
+                        className='flex-row items-center gap-3 py-2.5 pl-12 pr-5'
+                        style={({ pressed }) => ({
+                          backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                        })}
+                      >
+                        <RetryProviderLogo provider={model.provider} size={16} />
+                        <Text
+                          className='flex-1 text-[13px]'
+                          style={{ color: colors.foreground }}
+                          numberOfLines={1}
+                        >
+                          {model.name}
+                        </Text>
+                        {model.capabilities.includes('reasoning') ? (
+                          <Ionicons name='bulb-outline' size={14} color={`${colors.mutedForeground}80`} />
+                        ) : null}
+                      </Pressable>
+                    ))}
+                    {legacy.length > 0 ? (
+                      <>
+                        <View
+                          className='mx-5 my-1'
+                          style={{ height: 1, backgroundColor: `${colors.border}40` }}
+                        />
+                        <Pressable
+                          onPress={() =>
+                            setShowLegacy((prev) => ({
+                              ...prev,
+                              [provider.id]: !isLegacyExpanded,
+                            }))
+                          }
+                          className='flex-row items-center gap-3 py-2.5 pl-12 pr-5'
+                          style={({ pressed }) => ({
+                            backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                          })}
+                        >
+                          <Ionicons name='archive-outline' size={16} color={`${colors.mutedForeground}80`} />
+                          <Text
+                            className='flex-1 text-[13px]'
+                            style={{ color: colors.mutedForeground }}
+                          >
+                            Legacy models
+                          </Text>
+                          <Ionicons
+                            name={isLegacyExpanded ? 'chevron-down' : 'chevron-forward'}
+                            size={14}
+                            color={`${colors.mutedForeground}60`}
+                          />
+                        </Pressable>
+                        {isLegacyExpanded
+                          ? legacy.map((model) => (
+                              <Pressable
+                                key={model.id}
+                                onPress={() => handleSelect(model.id)}
+                                className='flex-row items-center gap-3 py-2.5 pl-16 pr-5'
+                                style={({ pressed }) => ({
+                                  backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                                })}
+                              >
+                                <RetryProviderLogo provider={model.provider} size={16} />
+                                <Text
+                                  className='flex-1 text-[13px]'
+                                  style={{ color: colors.foreground }}
+                                  numberOfLines={1}
+                                >
+                                  {model.name}
+                                </Text>
+                              </Pressable>
+                            ))
+                          : null}
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+              </View>
+            )
+          })}
+        </BottomSheetScrollView>
+      </BottomSheetModal>
+    </>
+  )
+}
+
 function MessageBubble({
   message,
   onRetry,
   onSaveEdit,
 }: {
   message: ChatMessage
-  onRetry?: (message: ChatMessage) => void
+  onRetry?: (message: ChatMessage, modelId?: string) => void
   onSaveEdit?: (
     message: ChatMessage,
     nextValue: string,
@@ -544,12 +865,7 @@ function MessageBubble({
         {!isEditing ? (
           <View className='mt-2 flex-row items-center gap-1 flex-wrap justify-end'>
             {onRetry ? (
-              <ActionButton
-                icon='refresh-outline'
-                label='Retry'
-                onPress={() => onRetry(message)}
-                colors={colors}
-              />
+              <RetryBottomSheet message={message} onRetry={onRetry} />
             ) : null}
             {onSaveEdit ? (
               <ActionButton
@@ -741,12 +1057,7 @@ function MessageBubble({
               />
 
               {onRetry ? (
-                <ActionButton
-                  icon='refresh-outline'
-                  label='Retry'
-                  onPress={() => onRetry(message)}
-                  colors={colors}
-                />
+                <RetryBottomSheet message={message} onRetry={onRetry} />
               ) : null}
             </View>
 

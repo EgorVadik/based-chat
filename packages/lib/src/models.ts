@@ -141,7 +141,6 @@ const DEFAULT_MODELS: Model[] = [
       "OpenAI's latest default frontier model for coding, reasoning, and multimodal chat",
     pricing: { input: 2.5, output: 15 },
     capabilities: ['image', 'reasoning', 'pdf'],
-    badge: 'NEW',
     isFavorite: true,
   },
   {
@@ -160,7 +159,6 @@ const DEFAULT_MODELS: Model[] = [
       'Faster, more efficient GPT-5.4 tier for high-throughput reasoning, coding, and agent workflows',
     pricing: { input: 0.75, output: 4.5 },
     capabilities: ['image', 'reasoning'],
-    badge: 'NEW',
   },
   {
     id: 'gpt-5-4-nano',
@@ -170,7 +168,6 @@ const DEFAULT_MODELS: Model[] = [
       'Most lightweight GPT-5.4 variant for speed-critical, high-volume tasks like classification, extraction, and sub-agents',
     pricing: { input: 0.2, output: 1.25 },
     capabilities: ['image', 'reasoning'],
-    badge: 'NEW',
   },
   {
     id: 'gpt-5-mini',
@@ -415,13 +412,13 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
-    id: 'grok-4-20-beta',
-    name: 'Grok 4.20 Beta',
+    id: 'grok-4-20',
+    name: 'Grok 4.20',
     provider: 'xAI',
-    description: "xAI's beta flagship with optional reasoning",
+    description:
+      "xAI's newest flagship with industry-leading speed and agentic tool calling",
     pricing: { input: 2, output: 6 },
     capabilities: ['image', 'reasoning'],
-    badge: 'NEW',
   },
   {
     id: 'grok-4-1-fast',
@@ -599,6 +596,24 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
+    id: 'glm-5-1',
+    name: 'GLM 5.1',
+    provider: 'Z.ai',
+    description:
+      'A major leap in coding capability built for long-horizon, independently executed tasks',
+    pricing: { input: 1, output: 3.2 },
+    capabilities: ['reasoning'],
+  },
+  {
+    id: 'glm-5v-turbo',
+    name: 'GLM 5V Turbo',
+    provider: 'Z.ai',
+    description:
+      "Z.ai's native multimodal agent model for vision-based coding, planning, and task execution",
+    pricing: { input: 1.2, output: 4 },
+    capabilities: ['image', 'reasoning'],
+  },
+  {
     id: 'glm-5',
     name: 'GLM 5',
     provider: 'Z.ai',
@@ -671,7 +686,6 @@ const DEFAULT_MODELS: Model[] = [
       'Next-gen agentic productivity model for autonomous workflows, debugging, analysis, and document generation',
     pricing: { input: 0.3, output: 1.2 },
     capabilities: ['reasoning'],
-    badge: 'NEW',
   },
   {
     id: 'minimax-m2-5',

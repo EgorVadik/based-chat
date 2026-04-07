@@ -597,8 +597,8 @@ export default function TemporaryChatScreen() {
   )
 
   const handleRetryMessage = useCallback(
-    async (message: ChatMessage) => {
-      const retryModelId = message.modelId ?? model.id
+    async (message: ChatMessage, overrideModelId?: string) => {
+      const retryModelId = overrideModelId ?? message.modelId ?? model.id
       const messageIndex = messages.findIndex(
         (threadMessage) => threadMessage.id === message.id,
       )
@@ -725,8 +725,8 @@ export default function TemporaryChatScreen() {
         message={item}
         onRetry={
           !isSubmitting && !activeAssistantMessage
-            ? (message) => {
-                void handleRetryMessage(message)
+            ? (message, modelId) => {
+                void handleRetryMessage(message, modelId)
               }
             : undefined
         }
