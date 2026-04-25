@@ -26,6 +26,7 @@ type UserPromptProfile = {
 const LLMS_KEY = 'llms'
 
 const DEFAULT_OPENROUTER_MODEL_IDS: Record<string, string> = {
+  'claude-opus-4-7': 'anthropic/claude-opus-4.7',
   'claude-opus-4-6': 'anthropic/claude-opus-4.6',
   'claude-sonnet-4-6': 'anthropic/claude-sonnet-4.6',
   'claude-haiku-4-5': 'anthropic/claude-haiku-4.5',
@@ -34,6 +35,7 @@ const DEFAULT_OPENROUTER_MODEL_IDS: Record<string, string> = {
   'claude-4-sonnet': 'anthropic/claude-sonnet-4',
   'gpt-5.4': 'openai/gpt-5.4',
   'gpt-5-4': 'openai/gpt-5.4',
+  'gpt-5-5': 'openai/gpt-5.5',
   'gpt-5-4-pro': 'openai/gpt-5.4-pro',
   'gpt-5-4-mini': 'openai/gpt-5.4-mini',
   'gpt-5-4-nano': 'openai/gpt-5.4-nano',
@@ -74,6 +76,8 @@ const DEFAULT_OPENROUTER_MODEL_IDS: Record<string, string> = {
   'llama-3-3-70b': 'meta-llama/llama-3.3-70b-instruct',
   'deepseek-r1': 'deepseek/deepseek-r1',
   'deepseek-v3': 'deepseek/deepseek-chat',
+  'deepseek-v4-pro': 'deepseek/deepseek-v4-pro',
+  'deepseek-v4-flash': 'deepseek/deepseek-v4-flash',
   'deepseek-v3-2': 'deepseek/deepseek-v3.2',
   'deepseek-r1-0528': 'deepseek/deepseek-r1-0528',
   'deepseek-v3-1': 'deepseek/deepseek-chat-v3.1',

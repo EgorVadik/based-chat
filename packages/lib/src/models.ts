@@ -96,6 +96,16 @@ const DEFAULT_MODELS: Model[] = [
       "Anthropic's strongest model for long-running coding and knowledge work",
     pricing: { input: 5, output: 25 },
     capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
+    id: 'claude-opus-4-7',
+    name: 'Claude Opus 4.7',
+    provider: 'Anthropic',
+    description:
+      "Next-generation Opus built for long-running, asynchronous agents and complex multi-step execution",
+    pricing: { input: 5, output: 25 },
+    capabilities: ['image', 'reasoning', 'pdf'],
   },
   {
     id: 'claude-haiku-4-5',
@@ -132,6 +142,16 @@ const DEFAULT_MODELS: Model[] = [
     pricing: { input: 3, output: 15 },
     capabilities: ['image', 'reasoning', 'pdf'],
     isLegacy: true,
+  },
+  {
+    id: 'gpt-5-5',
+    name: 'GPT 5.5',
+    provider: 'OpenAI',
+    description:
+      "OpenAI's frontier model for complex professional workloads with stronger reasoning, reliability, and token efficiency",
+    pricing: { input: 5, output: 30 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
   },
   {
     id: 'gpt-5-4',
@@ -488,6 +508,26 @@ const DEFAULT_MODELS: Model[] = [
     pricing: { input: 0.1, output: 0.32 },
     capabilities: [],
     isLegacy: true,
+  },
+  {
+    id: 'deepseek-v4-pro',
+    name: 'DeepSeek V4 Pro',
+    provider: 'DeepSeek',
+    description:
+      'Large-scale MoE model for advanced reasoning, coding, and long-horizon agent workflows',
+    pricing: { input: 1.74, output: 3.48 },
+    capabilities: ['reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+    provider: 'DeepSeek',
+    description:
+      'Efficiency-optimized MoE model for fast inference, high-throughput workloads, and strong reasoning performance',
+    pricing: { input: 0.14, output: 0.28 },
+    capabilities: ['reasoning'],
+    badge: 'NEW',
   },
   {
     id: 'deepseek-v3-2',
