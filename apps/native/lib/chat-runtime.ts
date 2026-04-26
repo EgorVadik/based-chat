@@ -1,11 +1,9 @@
 import type { Id } from '@based-chat/backend/convex/_generated/dataModel'
+import { File as ExpoFile } from 'expo-file-system'
 import { fetch as expoFetch } from 'expo/fetch'
-import {
-  FileSystemUploadType,
-  createUploadTask,
-} from 'expo-file-system/legacy'
+import { Platform } from 'react-native'
 
-import type { PickedDocument } from '@/components/chat/chat-input'
+import type { PickedAttachment } from '@/components/chat/chat-input'
 import type {
   ChatMessage,
   MessageAttachment,
@@ -64,12 +62,12 @@ export function toNativeChatMessage(message: any): ChatMessage {
   }
 }
 
-function inferAttachmentKind(attachment: PickedDocument): 'image' | 'file' {
+function inferAttachmentKind(attachment: PickedAttachment): 'image' | 'file' {
   return attachment.mimeType?.startsWith('image/') ? 'image' : 'file'
 }
 
 export async function uploadPickedDocuments(
-  attachments: PickedDocument[],
+  attachments: PickedAttachment[],
   generateAttachmentUploadUrl: (args: Record<string, never>) => Promise<string>,
   handlers: AttachmentUploadHandlers = {},
 ) {
@@ -83,39 +81,29 @@ export async function uploadPickedDocuments(
       const contentType = attachment.mimeType || 'application/octet-stream'
       handlers.onUploadProgress?.(attachment.uri, 0)
 
-      const uploadTask = createUploadTask(
-        uploadUrl,
-        attachment.uri,
-        {
-          httpMethod: 'POST',
-          uploadType: FileSystemUploadType.BINARY_CONTENT,
-          headers: {
-            'Content-Type': contentType,
-          },
-        },
-        (event) => {
-          if (event.totalBytesExpectedToSend <= 0) {
-            return
-          }
-
-          handlers.onUploadProgress?.(
-            attachment.uri,
-            Math.min(
-              100,
-              Math.round(
-                (event.totalBytesSent / event.totalBytesExpectedToSend) * 100,
-              ),
-            ),
-          )
-        },
-      )
-      const uploadResponse = await uploadTask.uploadAsync()
-
-      if (!uploadResponse) {
-        throw new Error('Failed to upload attachment.')
+      let buffer: ArrayBuffer
+      if (Platform.OS === 'web') {
+        const localResponse = await fetch(attachment.uri)
+        if (!localResponse.ok) {
+          throw new Error('Failed to read attachment.')
+        }
+        buffer = await localResponse.arrayBuffer()
+      } else {
+        // Native: `fetch(file:// | content://)` often throws "Network request failed".
+        const localFile = new ExpoFile(attachment.uri)
+        buffer = await localFile.arrayBuffer()
       }
+      const byteLength = buffer.byteLength
 
-      if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
+      const uploadResponse = await expoFetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': contentType,
+        },
+        body: buffer,
+      })
+
+      if (!uploadResponse.ok) {
         throw new Error('Failed to upload attachment.')
       }
 
@@ -123,17 +111,20 @@ export async function uploadPickedDocuments(
 
       let parsed: { storageId: Id<'_storage'> }
       try {
-        parsed = JSON.parse(uploadResponse.body) as { storageId: Id<'_storage'> }
+        const responseText = await uploadResponse.text()
+        parsed = JSON.parse(responseText) as { storageId: Id<'_storage'> }
       } catch {
         throw new Error('Failed to read uploaded attachment response.')
       }
+
+      const size = attachment.size ?? byteLength
 
       return {
         kind: inferAttachmentKind(attachment),
         storageId: parsed.storageId,
         fileName: attachment.name,
         contentType,
-        size: attachment.size ?? 0,
+        size,
         url: null,
       } satisfies PersistedAttachment
     }),

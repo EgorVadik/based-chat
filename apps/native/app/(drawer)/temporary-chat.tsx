@@ -766,8 +766,10 @@ export default function TemporaryChatScreen() {
           maintainVisibleContentPosition={{
             disabled: !allowAutoScroll,
             startRenderingFromBottom: true,
-            autoscrollToBottomThreshold: allowAutoScroll ? 0.2 : undefined,
-            animateAutoScrollToBottom: true,
+            autoscrollToBottomThreshold:
+              allowAutoScroll && !activeAssistantMessage ? 0.2 : undefined,
+            animateAutoScrollToBottom:
+              allowAutoScroll && !activeAssistantMessage,
           }}
           onScroll={handleListScroll}
           onScrollBeginDrag={handleScrollBeginDrag}

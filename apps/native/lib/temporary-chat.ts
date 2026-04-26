@@ -1,6 +1,6 @@
 import { fetch as expoFetch } from 'expo/fetch'
 
-import type { PickedDocument } from '@/components/chat/chat-input'
+import type { PickedAttachment } from '@/components/chat/chat-input'
 import type {
   ChatMessage,
   MessageAttachment,
@@ -148,7 +148,7 @@ export function toDisplayedTemporaryAttachments(
       'kind' | 'storageId' | 'fileName' | 'contentType' | 'size'
     >
   >,
-  pickedDocuments: PickedDocument[],
+  pickedDocuments: PickedAttachment[],
 ) {
   return uploadedAttachments.map((attachment, index) => {
     const pickedDocument = pickedDocuments[index]

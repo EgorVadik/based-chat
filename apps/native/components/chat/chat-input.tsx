@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
 import * as Haptics from 'expo-haptics'
+import * as ImagePicker from 'expo-image-picker'
 import { BottomSheet } from 'heroui-native'
 import { useCallback, useState } from 'react'
 import {
@@ -28,6 +29,9 @@ const MIN_MAX_RESULTS = 1
 const MAX_MAX_RESULTS = 5
 const RESULT_OPTIONS = [1, 2, 3, 4, 5] as const
 
+/** Camera JPEG compression (0–1). Slightly below 1 keeps uploads smaller for chat. */
+const CAMERA_CAPTURE_QUALITY = 0.75
+
 function getStoredSearchEnabled() {
   return appStorage.getBoolean(WEB_SEARCH_ENABLED_KEY) ?? false
 }
@@ -42,12 +46,54 @@ function isImageMimeType(mimeType: string | undefined) {
   return mimeType?.startsWith('image/') ?? false
 }
 
+/** Normalized local attachment for upload (document picker, camera, or photo library). */
+export type PickedAttachment = {
+  uri: string
+  name: string
+  mimeType?: string
+  size?: number
+}
+
+/** @deprecated Use `PickedAttachment`; kept for existing imports. */
+export type PickedDocument = PickedAttachment
+
 export type ChatInputOptions = {
   webSearchEnabled?: boolean
   webSearchMaxResults?: number
 }
 
-export type PickedDocument = DocumentPicker.DocumentPickerAsset
+function pickedFromDocumentAsset(
+  doc: DocumentPicker.DocumentPickerAsset,
+): PickedAttachment {
+  return {
+    uri: doc.uri,
+    name: doc.name ?? 'file',
+    mimeType: doc.mimeType,
+    size: doc.size,
+  }
+}
+
+function mimeTypeFromFileName(fileName: string): string | undefined {
+  const lower = fileName.toLowerCase()
+  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic'
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  return undefined
+}
+
+function pickedFromImageAsset(asset: ImagePicker.ImagePickerAsset): PickedAttachment {
+  const fallbackName = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`
+  const name = asset.fileName ?? fallbackName
+  const mimeType = mimeTypeFromFileName(name) ?? asset.mimeType ?? 'image/jpeg'
+  return {
+    uri: asset.uri,
+    name,
+    mimeType,
+    size: asset.fileSize,
+  }
+}
 
 export default function ChatInput({
   value,
@@ -67,8 +113,8 @@ export default function ChatInput({
   onValueChange: (value: string) => void
   onSend?: (message: string, options?: ChatInputOptions) => void
   onAbort?: () => void
-  attachments?: PickedDocument[]
-  onAttachmentsChange?: (attachments: PickedDocument[]) => void
+  attachments?: PickedAttachment[]
+  onAttachmentsChange?: (attachments: PickedAttachment[]) => void
   modelSelector?: React.ReactNode
   isStreaming?: boolean
   isSending?: boolean
@@ -81,6 +127,7 @@ export default function ChatInput({
   const [isSearchEnabled, setIsSearchEnabled] = useState(getStoredSearchEnabled)
   const [maxResults, setMaxResults] = useState(getStoredMaxResults)
   const [isResultsSheetOpen, setIsResultsSheetOpen] = useState(false)
+  const [isAttachSheetOpen, setIsAttachSheetOpen] = useState(false)
   const [previewUri, setPreviewUri] = useState<string | null>(null)
 
   const docs = attachments ?? []
@@ -102,17 +149,69 @@ export default function ChatInput({
     setIsResultsSheetOpen(false)
   }, [])
 
-  const handleAttachPress = useCallback(async () => {
+  const openAttachmentSheet = useCallback(() => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    Keyboard.dismiss()
+    setIsAttachSheetOpen(true)
+  }, [])
+
+  const appendAttachments = useCallback(
+    (next: PickedAttachment[]) => {
+      if (next.length === 0) return
+      onAttachmentsChange?.([...docs, ...next])
+    },
+    [docs, onAttachmentsChange],
+  )
+
+  const handleTakePhoto = useCallback(async () => {
+    setIsAttachSheetOpen(false)
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
+    if (!permission.granted) {
+      return
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: CAMERA_CAPTURE_QUALITY,
+    })
+
+    const asset = !result.canceled ? result.assets?.[0] : undefined
+    if (!asset) {
+      return
+    }
+
+    appendAttachments([pickedFromImageAsset(asset)])
+  }, [appendAttachments])
+
+  const handleChoosePhoto = useCallback(async () => {
+    setIsAttachSheetOpen(false)
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      return
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 1,
+    })
+
+    if (!result.canceled && result.assets.length > 0) {
+      appendAttachments(result.assets.map(pickedFromImageAsset))
+    }
+  }, [appendAttachments])
+
+  const handleChooseFile = useCallback(async () => {
+    setIsAttachSheetOpen(false)
     const result = await DocumentPicker.getDocumentAsync({
       multiple: true,
       copyToCacheDirectory: true,
     })
 
     if (!result.canceled && result.assets.length > 0) {
-      onAttachmentsChange?.([...docs, ...result.assets])
+      appendAttachments(result.assets.map(pickedFromDocumentAsset))
     }
-  }, [docs, onAttachmentsChange])
+  }, [appendAttachments])
 
   const removeAttachment = useCallback(
     (uri: string) => {
@@ -316,7 +415,7 @@ export default function ChatInput({
             {modelSelector ?? null}
             {/* Attach button */}
             <Pressable
-              onPress={() => void handleAttachPress()}
+              onPress={openAttachmentSheet}
               disabled={disabled || isStreaming || !canAttach}
               className='w-9 h-9 items-center justify-center rounded-xl'
               style={({ pressed }) => ({
@@ -469,7 +568,8 @@ export default function ChatInput({
             </>
           ) : null}
           <BottomSheet.Content
-            snapPoints={['32%']}
+            enableDynamicSizing
+            enableOverDrag={false}
             contentContainerClassName='px-4 pt-2 pb-safe-offset-4'
             backgroundStyle={{
               backgroundColor: colors.card,
@@ -524,6 +624,95 @@ export default function ChatInput({
                   ) : null}
                 </Pressable>
               ))}
+            </View>
+          </BottomSheet.Content>
+        </BottomSheet.Portal>
+      </BottomSheet>
+
+      {/* Attachment source BottomSheet */}
+      <BottomSheet isOpen={isAttachSheetOpen} onOpenChange={setIsAttachSheetOpen}>
+        <BottomSheet.Portal>
+          {isAttachSheetOpen ? (
+            <>
+              <BottomSheet.Overlay isCloseOnPress className='bg-transparent' />
+              <Pressable
+                className='absolute inset-0'
+                onPress={() => setIsAttachSheetOpen(false)}
+                style={{ backgroundColor: 'rgba(0, 0, 0, 0.24)' }}
+              />
+            </>
+          ) : null}
+          <BottomSheet.Content
+            enableDynamicSizing
+            enableOverDrag={false}
+            contentContainerClassName='px-4 pt-2 pb-safe-offset-4'
+            backgroundStyle={{
+              backgroundColor: colors.card,
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+            handleIndicatorClassName='bg-muted'
+            enablePanDownToClose
+          >
+            <View className='gap-1'>
+              <Text
+                className='px-1 pb-2 text-[10px] uppercase font-medium'
+                style={{
+                  color: colors.mutedForeground,
+                  letterSpacing: 1.2,
+                }}
+              >
+                Add attachment
+              </Text>
+              {Platform.OS !== 'web' ? (
+                <Pressable
+                  onPress={() => {
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                    void handleTakePhoto()
+                  }}
+                  className='flex-row items-center gap-3 rounded-2xl px-4 py-3'
+                  style={({ pressed }) => ({
+                    backgroundColor: pressed ? colors.accent : `${colors.accent}B3`,
+                  })}
+                >
+                  <Ionicons name='camera-outline' size={20} color={colors.primary} />
+                  <Text className='text-sm font-medium' style={{ color: colors.foreground }}>
+                    Take photo
+                  </Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => {
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                  void handleChoosePhoto()
+                }}
+                className='flex-row items-center gap-3 rounded-2xl px-4 py-3'
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? colors.accent : `${colors.accent}B3`,
+                })}
+              >
+                <Ionicons name='images-outline' size={20} color={colors.primary} />
+                <Text className='text-sm font-medium' style={{ color: colors.foreground }}>
+                  Choose photo
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                  void handleChooseFile()
+                }}
+                className='flex-row items-center gap-3 rounded-2xl px-4 py-3'
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? colors.accent : `${colors.accent}B3`,
+                })}
+              >
+                <Ionicons name='document-outline' size={20} color={colors.primary} />
+                <Text className='text-sm font-medium' style={{ color: colors.foreground }}>
+                  Choose file
+                </Text>
+              </Pressable>
             </View>
           </BottomSheet.Content>
         </BottomSheet.Portal>

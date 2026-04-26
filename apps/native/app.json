@@ -10,7 +10,15 @@
     "slug": "based-chat",
     "plugins": [
       "expo-font",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Based Chat needs access to your photos to attach images to messages.",
+          "cameraPermission": "Based Chat needs camera access to take photos you can attach to messages.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
