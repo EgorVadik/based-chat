@@ -3,7 +3,7 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as Haptics from 'expo-haptics'
 import * as ImagePicker from 'expo-image-picker'
 import { BottomSheet } from 'heroui-native'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   Dimensions,
@@ -14,14 +14,25 @@ import {
   Pressable,
   ScrollView,
   StatusBar,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native'
-import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated'
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  type SharedValue,
+} from 'react-native-reanimated'
 
 import { appStorage } from '@/lib/mmkv'
 import { useColors } from '@/lib/use-colors'
+
+import { useSpeechToText } from '@/components/chat/use-speech-to-text'
 
 const WEB_SEARCH_ENABLED_KEY = 'based-chat:web-search-enabled'
 const WEB_SEARCH_MAX_RESULTS_KEY = 'based-chat:web-search-max-results'
@@ -44,6 +55,88 @@ function getStoredMaxResults() {
 
 function isImageMimeType(mimeType: string | undefined) {
   return mimeType?.startsWith('image/') ?? false
+}
+
+const VOICE_METER_BARS = 7
+
+function VoiceMeterBar({
+  index,
+  total,
+  level,
+  accent,
+  dim,
+}: {
+  index: number
+  total: number
+  level: SharedValue<number>
+  accent: string
+  dim: string
+}) {
+  const style = useAnimatedStyle(() => {
+    const wobble = 0.28 + 0.11 * (index + 1) + 0.06 * (index % 3)
+    const h = 3.5 + level.value * 22 * wobble
+    return {
+      height: h,
+      opacity:
+        0.28 +
+        level.value * 0.55 * (0.4 + 0.6 * ((index + 1) / total)),
+    }
+  })
+  return (
+    <Animated.View
+      className='w-[2.5px] overflow-hidden rounded-full'
+      style={[
+        style,
+        {
+          backgroundColor: accent,
+          shadowColor: accent,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.45,
+          shadowRadius: 3,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: dim,
+        },
+      ]}
+    />
+  )
+}
+
+/**
+ * Refined “broadcast” level meter: spring-smoothed columns, tiered opacities, slight vertical rhythm.
+ */
+function VoiceLevelMeter({
+  level,
+  accent,
+  dim,
+}: {
+  level: number
+  accent: string
+  dim: string
+}) {
+  const t = useSharedValue(0)
+
+  useEffect(() => {
+    t.value = withSpring(Math.max(0, Math.min(1, level)), {
+      stiffness: 220,
+      damping: 22,
+      mass: 0.45,
+    })
+  }, [level, t])
+
+  return (
+    <View className='h-[28px] flex-row items-end justify-end gap-[3px] pr-0.5'>
+      {Array.from({ length: VOICE_METER_BARS }, (_, i) => (
+        <VoiceMeterBar
+          key={i}
+          index={i}
+          total={VOICE_METER_BARS}
+          level={t}
+          accent={accent}
+          dim={dim}
+        />
+      ))}
+    </View>
+  )
 }
 
 /** Normalized local attachment for upload (document picker, camera, or photo library). */
@@ -129,6 +222,17 @@ export default function ChatInput({
   const [isResultsSheetOpen, setIsResultsSheetOpen] = useState(false)
   const [isAttachSheetOpen, setIsAttachSheetOpen] = useState(false)
   const [previewUri, setPreviewUri] = useState<string | null>(null)
+
+  const speech = useSpeechToText()
+
+  const appendTranscribedText = useCallback(
+    (text: string) => {
+      const trimmed = value.trim()
+      const next = trimmed.length > 0 ? `${trimmed} ${text}` : text
+      onValueChange(next)
+    },
+    [onValueChange, value],
+  )
 
   const docs = attachments ?? []
   const canSend = value.trim().length > 0 || docs.length > 0
@@ -273,6 +377,12 @@ export default function ChatInput({
           backgroundColor: `${colors.card}E6`,
           borderWidth: 1,
           borderColor: `${colors.border}99`,
+          borderTopColor: `${colors.foreground}12`,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: Platform.OS === 'ios' ? 0.22 : 0.14,
+          shadowRadius: 20,
+          elevation: Platform.OS === 'android' ? 5 : 0,
         }}
       >
         {/* Attachment preview strip */}
@@ -402,6 +512,31 @@ export default function ChatInput({
           }}
         />
 
+        {speech.isSupported && speech.errorMessage ? (
+          <View className='px-4 pb-1'>
+            <View
+              className='flex-row items-start gap-2 rounded-xl border px-3 py-2'
+              style={{
+                borderColor: `${colors.destructive}40`,
+                backgroundColor: `${colors.destructive}12`,
+              }}
+            >
+              <Ionicons
+                name='alert-circle'
+                size={16}
+                color={colors.destructive}
+                style={{ marginTop: 1 }}
+              />
+              <Text
+                className='flex-1 text-xs leading-[18px]'
+                style={{ color: colors.destructive }}
+              >
+                {speech.errorMessage}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Toolbar row */}
         <Animated.View
           layout={LinearTransition.duration(200)}
@@ -430,6 +565,82 @@ export default function ChatInput({
                 style={{ transform: [{ rotate: '-45deg' }] }}
               />
             </Pressable>
+
+            {speech.isSupported && speech.phase === 'recording' ? (
+              <VoiceLevelMeter
+                level={speech.level}
+                accent={colors.primary}
+                dim={colors.border}
+              />
+            ) : null}
+
+            {speech.isSupported && speech.phase === 'transcribing' ? (
+              <Animated.View
+                entering={FadeIn.duration(180)}
+                className='h-9 flex-row items-center gap-2.5 pl-0.5 pr-1.5'
+              >
+                <ActivityIndicator size='small' color={colors.primary} />
+                <Text
+                  className='text-[10px] font-semibold'
+                  style={{
+                    color: colors.mutedForeground,
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  Converting…
+                </Text>
+              </Animated.View>
+            ) : null}
+
+            {speech.isSupported ? (
+              <Pressable
+                onPress={() => {
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                  void speech.toggle(appendTranscribedText)
+                }}
+                disabled={
+                  disabled ||
+                  isStreaming ||
+                  isSending ||
+                  speech.phase === 'transcribing'
+                }
+                className='h-10 w-10 items-center justify-center rounded-2xl'
+                style={({ pressed }) => ({
+                  backgroundColor:
+                    speech.phase === 'recording'
+                      ? pressed
+                        ? `${colors.primary}4D`
+                        : `${colors.primary}33`
+                      : speech.phase === 'transcribing'
+                        ? `${colors.accent}B3`
+                        : pressed
+                          ? `${colors.accent}B3`
+                          : 'transparent',
+                  opacity:
+                    disabled || isStreaming || isSending
+                      ? 0.35
+                      : speech.phase === 'transcribing'
+                        ? 0.55
+                        : 1,
+                })}
+              >
+                {speech.phase === 'transcribing' ? (
+                  <Ionicons
+                    name='mic'
+                    size={20}
+                    color={`${colors.primary}B3`}
+                  />
+                ) : speech.phase === 'recording' ? (
+                  <Ionicons name='stop' size={20} color={colors.primaryForeground} />
+                ) : (
+                  <Ionicons
+                    name='mic'
+                    size={20}
+                    color={colors.mutedForeground}
+                  />
+                )}
+              </Pressable>
+            ) : null}
 
             {/* Search toggle */}
             <Pressable

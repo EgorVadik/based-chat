@@ -29,6 +29,7 @@
     "convex": "catalog:",
     "dotenv": "catalog:",
     "expo": "^55.0.0",
+    "expo-audio": "^55.0.14",
     "expo-auth-session": "^55.0.8",
     "expo-clipboard": "^55.0.9",
     "expo-constants": "~55.0.7",

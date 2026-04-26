@@ -6,6 +6,7 @@ import {
   streamAssistantReplyOptions,
   streamTemporaryAssistantReply,
 } from "./messages";
+import { transcribeAudio, transcribeAudioOptions } from "./transcribe";
 
 const http = httpRouter();
 
@@ -29,6 +30,16 @@ http.route({
   path: "/messages/temp-stream",
   method: "OPTIONS",
   handler: streamAssistantReplyOptions,
+});
+http.route({
+  path: "/audio/transcribe",
+  method: "POST",
+  handler: transcribeAudio,
+});
+http.route({
+  path: "/audio/transcribe",
+  method: "OPTIONS",
+  handler: transcribeAudioOptions,
 });
 
 export default http;

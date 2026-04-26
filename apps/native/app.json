@@ -10,6 +10,7 @@
     "slug": "based-chat",
     "plugins": [
       "expo-font",
+      "expo-audio",
       "@react-native-google-signin/google-signin",
       [
         "expo-image-picker",
@@ -25,10 +26,16 @@
       "reactCompiler": true
     },
     "android": {
-      "package": "com.anonymous.basedchat"
+      "package": "com.anonymous.basedchat",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "ios": {
-      "bundleIdentifier": "com.anonymous.basedchat"
+      "bundleIdentifier": "com.anonymous.basedchat",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Based Chat uses the microphone to transcribe your voice into the message field."
+      }
     }
   }
 }

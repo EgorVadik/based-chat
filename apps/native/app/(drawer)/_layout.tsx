@@ -1,5 +1,6 @@
 import { Drawer } from 'expo-router/drawer'
 import React from 'react'
+import { useWindowDimensions } from 'react-native'
 
 import { ChatHeader } from '@/components/chat/chat-header'
 import { DrawerContent } from '@/components/drawer-content'
@@ -8,6 +9,7 @@ import { useColors } from '@/lib/use-colors'
 
 function DrawerLayout() {
   const colors = useColors()
+  const { width: windowWidth } = useWindowDimensions()
 
   return (
     <Drawer
@@ -17,6 +19,9 @@ function DrawerLayout() {
         drawerType: 'slide',
         keyboardDismissMode: 'on-drag',
         drawerStyle: { backgroundColor: colors.background },
+        // Default is a narrow left-edge strip; use full width so a rightward
+        // swipe can open the drawer from anywhere on the screen.
+        swipeEdgeWidth: windowWidth,
       }}
     >
       <Drawer.Screen

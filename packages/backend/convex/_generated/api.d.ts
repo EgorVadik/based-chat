@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as corsHttp from "../corsHttp.js";
 import type * as favoriteModels from "../favoriteModels.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
@@ -17,6 +18,7 @@ import type * as messages from "../messages.js";
 import type * as modelCatalog from "../modelCatalog.js";
 import type * as redisConfig from "../redisConfig.js";
 import type * as threads from "../threads.js";
+import type * as transcribe from "../transcribe.js";
 
 import type {
   ApiFromModules,
@@ -26,6 +28,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  corsHttp: typeof corsHttp;
   favoriteModels: typeof favoriteModels;
   healthCheck: typeof healthCheck;
   http: typeof http;
@@ -34,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   modelCatalog: typeof modelCatalog;
   redisConfig: typeof redisConfig;
   threads: typeof threads;
+  transcribe: typeof transcribe;
 }>;
 
 /**
