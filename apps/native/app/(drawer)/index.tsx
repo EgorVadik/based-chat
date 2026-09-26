@@ -1,5 +1,6 @@
 import { api } from '@based-chat/backend/convex/_generated/api'
 import { Ionicons } from '@expo/vector-icons'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { useAction, useMutation } from 'convex/react'
 import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
@@ -19,9 +20,18 @@ import {
   getStoredOpenRouterApiKey,
 } from '@/lib/api-keys'
 import {
+  deleteLocalAttachmentCopies,
+  toAttachmentKindRefs,
+  usePublishComposerAttachments,
+} from '@/lib/attachments'
+import {
   uploadPickedDocuments,
 } from '@/lib/chat-runtime'
-import { modelCanAcceptAttachments } from '@/lib/models'
+import {
+  modelSupportsAttachments,
+  modelSupportsFileAttachments,
+  modelSupportsImageUploads,
+} from '@/lib/models'
 import { useSelectedModel } from '@/lib/selected-model'
 import { useColors } from '@/lib/use-colors'
 
@@ -37,6 +47,7 @@ const TOAST_DURATION_MS = 5000
 export default function NewChat() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
+  const headerHeight = useHeaderHeight()
   const { toast } = useToast()
   const { model } = useSelectedModel()
   const [inputValue, setInputValue] = useState('')
@@ -55,6 +66,8 @@ export default function NewChat() {
   const generateThreadTitle = useAction(
     (api.messages as unknown as { generateThreadTitle: any }).generateThreadTitle,
   )
+
+  usePublishComposerAttachments('new-chat', attachments)
 
   useEffect(() => {
     if (sendError && (inputValue.trim().length > 0 || attachments.length > 0)) {
@@ -87,8 +100,11 @@ export default function NewChat() {
         return
       }
 
-      if (attachments.length > 0 && !modelCanAcceptAttachments(model)) {
-        const message = 'This model does not support attachments.'
+      if (
+        attachments.length > 0 &&
+        !modelSupportsAttachments(model, toAttachmentKindRefs(attachments))
+      ) {
+        const message = 'This model does not support these attachments.'
         setSendError(message)
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
         toast.show({
@@ -99,16 +115,20 @@ export default function NewChat() {
         return
       }
 
+      const sentAttachments = attachments
       setSendError(null)
       setIsSubmitting(true)
       attachmentProgressRef.current = Object.fromEntries(
-        attachments.map((attachment) => [attachment.uri, 0]),
+        sentAttachments.map((attachment) => [attachment.uri, 0]),
       )
-      setUploadProgress(attachments.length > 0 ? 0 : null)
+      setUploadProgress(sentAttachments.length > 0 ? 0 : null)
 
+      let firstMessageResult: Awaited<
+        ReturnType<typeof createThreadWithFirstMessage>
+      >
       try {
         const uploadedAttachments = await uploadPickedDocuments(
-          attachments,
+          sentAttachments,
           generateAttachmentUploadUrl,
           {
             onUploadProgress: (attachmentUri, progress) => {
@@ -127,7 +147,7 @@ export default function NewChat() {
           },
         )
 
-        const firstMessageResult = await createThreadWithFirstMessage({
+        firstMessageResult = await createThreadWithFirstMessage({
           content: message,
           attachments: uploadedAttachments.map((attachment) => ({
             kind: attachment.kind,
@@ -138,40 +158,6 @@ export default function NewChat() {
           })),
           modelId: model.id,
         })
-
-        setInputValue('')
-        setAttachments([])
-
-        router.navigate({
-          pathname: '/(drawer)/chat/[threadId]',
-          params: { threadId: firstMessageResult.thread._id },
-        })
-
-        const [assistantReplyResult] = await Promise.allSettled([
-          createAssistantReply({
-            threadId: firstMessageResult.thread._id,
-            userMessageId: firstMessageResult.message._id,
-            userMessageUpdatedAt:
-              firstMessageResult.message.updatedAt ??
-              firstMessageResult.message.createdAt,
-            modelId: model.id,
-            webSearchEnabled: options?.webSearchEnabled,
-            webSearchMaxResults: options?.webSearchMaxResults,
-          }),
-          generateThreadTitle({
-            threadId: firstMessageResult.thread._id,
-            messageId: firstMessageResult.message._id,
-            apiKey,
-          }),
-        ])
-
-        if (assistantReplyResult.status === 'rejected') {
-          throw assistantReplyResult.reason
-        }
-
-        if (!assistantReplyResult.value) {
-          throw new Error('Could not start assistant reply.')
-        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Failed to send message.'
@@ -182,10 +168,58 @@ export default function NewChat() {
           label: message,
           duration: TOAST_DURATION_MS,
         })
+        return
       } finally {
         setIsSubmitting(false)
         setUploadProgress(null)
         attachmentProgressRef.current = {}
+      }
+
+      // The thread exists now: reset the composer before navigating so New
+      // Chat is immediately usable again.
+      setInputValue('')
+      setAttachments([])
+      deleteLocalAttachmentCopies(sentAttachments)
+
+      const threadId = firstMessageResult.thread._id
+      router.navigate({
+        pathname: '/(drawer)/chat/[threadId]',
+        params: { threadId },
+      })
+
+      // Title generation is best-effort and must not hold the composer.
+      void generateThreadTitle({
+        threadId,
+        messageId: firstMessageResult.message._id,
+        apiKey,
+      }).catch(() => {})
+
+      try {
+        const assistantReply = await createAssistantReply({
+          threadId,
+          userMessageId: firstMessageResult.message._id,
+          userMessageUpdatedAt:
+            firstMessageResult.message.updatedAt ??
+            firstMessageResult.message.createdAt,
+          modelId: model.id,
+          webSearchEnabled: options?.webSearchEnabled,
+          webSearchMaxResults: options?.webSearchMaxResults,
+        })
+
+        if (!assistantReply) {
+          throw new Error('Could not start assistant reply.')
+        }
+      } catch (error) {
+        // The user is on the thread now; the message can be retried there.
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+        toast.show({
+          variant: 'danger',
+          label:
+            error instanceof Error
+              ? error.message
+              : 'Could not start assistant reply.',
+          duration: TOAST_DURATION_MS,
+        })
       }
     },
     [
@@ -204,7 +238,7 @@ export default function NewChat() {
     <KeyboardAvoidingView
       className='flex-1'
       behavior='padding'
-      keyboardVerticalOffset={90}
+      keyboardVerticalOffset={headerHeight}
       style={{ backgroundColor: colors.background }}
     >
       <ScrollView
@@ -297,7 +331,8 @@ export default function NewChat() {
           isSending={isSubmitting}
           uploadProgress={uploadProgress}
           disabled={isSubmitting}
-          canAttach={modelCanAcceptAttachments(model)}
+          supportsImages={modelSupportsImageUploads(model)}
+          supportsFiles={modelSupportsFileAttachments(model)}
         />
       </View>
     </KeyboardAvoidingView>

@@ -2,13 +2,15 @@ import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
 import * as Haptics from 'expo-haptics'
 import * as ImagePicker from 'expo-image-picker'
-import { BottomSheet } from 'heroui-native'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useFocusEffect } from 'expo-router'
+import { BottomSheet, useToast } from 'heroui-native'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Dimensions,
   Image,
   Keyboard,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -29,6 +31,12 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated'
 
+import {
+  deleteLocalAttachmentCopies,
+  FILE_ATTACHMENT_MIME_TYPES,
+  isAttachmentTooLarge,
+  MAX_ATTACHMENT_SIZE_LABEL,
+} from '@/lib/attachments'
 import { appStorage } from '@/lib/mmkv'
 import { useColors } from '@/lib/use-colors'
 
@@ -42,6 +50,9 @@ const RESULT_OPTIONS = [1, 2, 3, 4, 5] as const
 
 /** Camera JPEG compression (0–1). Slightly below 1 keeps uploads smaller for chat. */
 const CAMERA_CAPTURE_QUALITY = 0.75
+/** Library JPEG compression; also forces re-encoding instead of copying HEIC. */
+const LIBRARY_IMAGE_QUALITY = 0.8
+const TOAST_DURATION_MS = 5000
 
 function getStoredSearchEnabled() {
   return appStorage.getBoolean(WEB_SEARCH_ENABLED_KEY) ?? false
@@ -179,7 +190,12 @@ function mimeTypeFromFileName(fileName: string): string | undefined {
 function pickedFromImageAsset(asset: ImagePicker.ImagePickerAsset): PickedAttachment {
   const fallbackName = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`
   const name = asset.fileName ?? fallbackName
-  const mimeType = mimeTypeFromFileName(name) ?? asset.mimeType ?? 'image/jpeg'
+  // Prefer the written file's extension: it reflects any HEIC -> JPEG export.
+  const mimeType =
+    mimeTypeFromFileName(asset.uri) ??
+    asset.mimeType ??
+    mimeTypeFromFileName(name) ??
+    'image/jpeg'
   return {
     uri: asset.uri,
     name,
@@ -199,7 +215,8 @@ export default function ChatInput({
   isStreaming = false,
   isSending = false,
   disabled = false,
-  canAttach = true,
+  supportsImages = true,
+  supportsFiles = true,
   uploadProgress = null,
 }: {
   value: string
@@ -212,10 +229,15 @@ export default function ChatInput({
   isStreaming?: boolean
   isSending?: boolean
   disabled?: boolean
-  canAttach?: boolean
+  /** Model capability `image`: camera / photo library / image files. */
+  supportsImages?: boolean
+  /** Model capability `pdf`: documents and other files. */
+  supportsFiles?: boolean
   uploadProgress?: number | null
 }) {
   const colors = useColors()
+  const { toast } = useToast()
+  const canAttach = supportsImages || supportsFiles
   const [inputHeight, setInputHeight] = useState(44)
   const [isSearchEnabled, setIsSearchEnabled] = useState(getStoredSearchEnabled)
   const [maxResults, setMaxResults] = useState(getStoredMaxResults)
@@ -223,15 +245,31 @@ export default function ChatInput({
   const [isAttachSheetOpen, setIsAttachSheetOpen] = useState(false)
   const [previewUri, setPreviewUri] = useState<string | null>(null)
 
-  const speech = useSpeechToText()
+  // Transcription resolves asynchronously; append to the latest draft rather
+  // than the value captured when recording stopped.
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  }, [value])
 
   const appendTranscribedText = useCallback(
     (text: string) => {
-      const trimmed = value.trim()
+      const trimmed = valueRef.current.trim()
       const next = trimmed.length > 0 ? `${trimmed} ${text}` : text
+      valueRef.current = next
       onValueChange(next)
     },
-    [onValueChange, value],
+    [onValueChange],
+  )
+
+  const speech = useSpeechToText(appendTranscribedText)
+  const { cancel: cancelSpeech } = speech
+  const isTranscribing = speech.phase === 'transcribing'
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => cancelSpeech()
+    }, [cancelSpeech]),
   )
 
   const docs = attachments ?? []
@@ -262,15 +300,63 @@ export default function ChatInput({
   const appendAttachments = useCallback(
     (next: PickedAttachment[]) => {
       if (next.length === 0) return
-      onAttachmentsChange?.([...docs, ...next])
+
+      const accepted: PickedAttachment[] = []
+      const rejected: PickedAttachment[] = []
+      let rejection: string | null = null
+      for (const attachment of next) {
+        const isSupported = isImageMimeType(attachment.mimeType)
+          ? supportsImages
+          : supportsFiles
+        if (!isSupported) {
+          rejected.push(attachment)
+          rejection = isImageMimeType(attachment.mimeType)
+            ? 'This model does not support images.'
+            : 'This model does not support file attachments.'
+        } else if (isAttachmentTooLarge(attachment)) {
+          rejected.push(attachment)
+          rejection = `Attachments must be ${MAX_ATTACHMENT_SIZE_LABEL} or smaller.`
+        } else {
+          accepted.push(attachment)
+        }
+      }
+
+      if (rejected.length > 0) {
+        deleteLocalAttachmentCopies(rejected)
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+        toast.show({
+          variant: 'danger',
+          label:
+            rejected.length === 1
+              ? `Skipped ${rejected[0]!.name}`
+              : `Skipped ${rejected.length} attachments`,
+          description: rejection ?? undefined,
+          duration: TOAST_DURATION_MS,
+        })
+      }
+
+      if (accepted.length > 0) {
+        onAttachmentsChange?.([...docs, ...accepted])
+      }
     },
-    [docs, onAttachmentsChange],
+    [docs, onAttachmentsChange, supportsFiles, supportsImages, toast],
   )
 
   const handleTakePhoto = useCallback(async () => {
     setIsAttachSheetOpen(false)
     const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted) {
+      toast.show({
+        variant: 'danger',
+        label: 'Camera access is off',
+        description: 'Allow camera access in Settings to take photos.',
+        actionLabel: permission.canAskAgain ? undefined : 'Settings',
+        onActionPress: ({ hide }) => {
+          hide()
+          void Linking.openSettings()
+        },
+        duration: TOAST_DURATION_MS,
+      })
       return
     }
 
@@ -289,15 +375,14 @@ export default function ChatInput({
 
   const handleChoosePhoto = useCallback(async () => {
     setIsAttachSheetOpen(false)
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (!permission.granted) {
-      return
-    }
-
+    // The system photo picker needs no library permission.
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
-      quality: 1,
+      quality: LIBRARY_IMAGE_QUALITY,
+      // Export HEIC as JPEG; most providers reject image/heic.
+      preferredAssetRepresentationMode:
+        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     })
 
     if (!result.canceled && result.assets.length > 0) {
@@ -310,23 +395,30 @@ export default function ChatInput({
     const result = await DocumentPicker.getDocumentAsync({
       multiple: true,
       copyToCacheDirectory: true,
+      type:
+        supportsImages && supportsFiles
+          ? '*/*'
+          : supportsImages
+            ? 'image/*'
+            : FILE_ATTACHMENT_MIME_TYPES,
     })
 
     if (!result.canceled && result.assets.length > 0) {
       appendAttachments(result.assets.map(pickedFromDocumentAsset))
     }
-  }, [appendAttachments])
+  }, [appendAttachments, supportsFiles, supportsImages])
 
   const removeAttachment = useCallback(
     (uri: string) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+      deleteLocalAttachmentCopies(docs.filter((d) => d.uri === uri))
       onAttachmentsChange?.(docs.filter((d) => d.uri !== uri))
     },
     [docs, onAttachmentsChange],
   )
 
   const handleSend = () => {
-    if (isSending) {
+    if (isSending || isTranscribing) {
       return
     }
 
@@ -596,7 +688,7 @@ export default function ChatInput({
               <Pressable
                 onPress={() => {
                   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                  void speech.toggle(appendTranscribedText)
+                  void speech.toggle()
                 }}
                 disabled={
                   disabled ||
@@ -708,13 +800,18 @@ export default function ChatInput({
           {/* Send button */}
           <Pressable
             onPress={handleSend}
-            disabled={disabled || (!canSend && !isStreaming)}
+            disabled={
+              disabled || isTranscribing || (!canSend && !isStreaming)
+            }
             className='w-8 h-8 rounded-full items-center justify-center'
             style={({ pressed }) => ({
               backgroundColor: pressed
                 ? `${sendButtonColor}CC`
                 : sendButtonColor,
-              opacity: disabled || (!canSend && !isStreaming) ? 0.5 : 1,
+              opacity:
+                disabled || isTranscribing || (!canSend && !isStreaming)
+                  ? 0.5
+                  : 1,
             })}
           >
             {isStreaming ? (
@@ -877,7 +974,7 @@ export default function ChatInput({
               >
                 Add attachment
               </Text>
-              {Platform.OS !== 'web' ? (
+              {Platform.OS !== 'web' && supportsImages ? (
                 <Pressable
                   onPress={() => {
                     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
@@ -894,21 +991,23 @@ export default function ChatInput({
                   </Text>
                 </Pressable>
               ) : null}
-              <Pressable
-                onPress={() => {
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                  void handleChoosePhoto()
-                }}
-                className='flex-row items-center gap-3 rounded-2xl px-4 py-3'
-                style={({ pressed }) => ({
-                  backgroundColor: pressed ? colors.accent : `${colors.accent}B3`,
-                })}
-              >
-                <Ionicons name='images-outline' size={20} color={colors.primary} />
-                <Text className='text-sm font-medium' style={{ color: colors.foreground }}>
-                  Choose photo
-                </Text>
-              </Pressable>
+              {supportsImages ? (
+                <Pressable
+                  onPress={() => {
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                    void handleChoosePhoto()
+                  }}
+                  className='flex-row items-center gap-3 rounded-2xl px-4 py-3'
+                  style={({ pressed }) => ({
+                    backgroundColor: pressed ? colors.accent : `${colors.accent}B3`,
+                  })}
+                >
+                  <Ionicons name='images-outline' size={20} color={colors.primary} />
+                  <Text className='text-sm font-medium' style={{ color: colors.foreground }}>
+                    Choose photo
+                  </Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 onPress={() => {
                   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)

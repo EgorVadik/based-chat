@@ -12,7 +12,7 @@ import { appStorage } from '@/lib/mmkv'
 
 type ThemeName = 'light' | 'dark'
 
-const THEME_STORAGE_KEY = 'based-chat-theme'
+export const THEME_STORAGE_KEY = 'based-chat-theme'
 
 type AppThemeContextType = {
   currentTheme: string

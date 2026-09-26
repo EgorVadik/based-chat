@@ -28,12 +28,16 @@ export async function signInWithGoogle(): Promise<void> {
     throw new Error('No ID token received from Google')
   }
 
-  await authClient.signIn.social({
+  // better-auth returns `{ error }` instead of throwing.
+  const { error } = await authClient.signIn.social({
     provider: 'google',
     idToken: {
       token: response.data.idToken,
     },
   })
+  if (error) {
+    throw new Error(error.message || 'Google sign-in failed.')
+  }
 }
 
 export async function signInWithGitHub(): Promise<void> {

@@ -1,6 +1,7 @@
 import { api } from '@based-chat/backend/convex/_generated/api'
 import type { Id } from '@based-chat/backend/convex/_generated/dataModel'
 import { Ionicons } from '@expo/vector-icons'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useMutation, useQuery } from 'convex/react'
@@ -28,17 +29,29 @@ import MessageBubble, {
 } from '@/components/chat/message-bubble'
 import { getStoredOpenRouterApiKey } from '@/lib/api-keys'
 import {
+  deleteLocalAttachmentCopies,
+  toAttachmentKindRefs,
+  usePublishComposerAttachments,
+} from '@/lib/attachments'
+import {
+  createStreamDeltaBuffer,
   type PersistentMessageStreamResult,
   startPersistentMessageStream,
   toNativeChatMessage,
   uploadPickedDocuments,
 } from '@/lib/chat-runtime'
-import { getModelById, modelCanAcceptAttachments } from '@/lib/models'
+import {
+  getModelById,
+  modelSupportsAttachments,
+  modelSupportsFileAttachments,
+  modelSupportsImageUploads,
+} from '@/lib/models'
 import { useSelectedModel } from '@/lib/selected-model'
 import { useColors } from '@/lib/use-colors'
 
 const TOAST_DURATION_MS = 5000
 const AUTO_SCROLL_THRESHOLD = 80
+const EMPTY_ATTACHMENTS: Array<{ kind: string }> = []
 
 type LiveStreamState = {
   streamId: string
@@ -135,10 +148,18 @@ function EmptyState({ colors }: { colors: ReturnType<typeof useColors> }) {
   )
 }
 
-export default function ChatScreen() {
+export default function ChatRoute() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>()
+
+  // Drawer routes reuse one screen instance across params. Keying by thread
+  // gives every thread its own draft, attachments and stream state.
+  return <ThreadChatScreen key={threadId} threadId={threadId} />
+}
+
+function ThreadChatScreen({ threadId }: { threadId: string | undefined }) {
   const colors = useColors()
   const insets = useSafeAreaInsets()
+  const headerHeight = useHeaderHeight()
   const { toast } = useToast()
   const { model, setModel } = useSelectedModel()
   const listRef = useRef<FlashListRef<ChatMessage>>(null)
@@ -183,10 +204,17 @@ export default function ChatScreen() {
       : 'skip',
   )
 
+  usePublishComposerAttachments('thread', attachments)
+
   const messages: ChatMessage[] = useMemo(
     () => (rawMessages ?? []).map(toNativeChatMessage),
     [rawMessages],
   )
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
   const displayedMessages: ChatMessage[] = useMemo(
     () =>
       messages.map((message) => {
@@ -254,6 +282,12 @@ export default function ChatScreen() {
         ),
     [displayedMessages],
   )
+  // Depend on primitives: `activeAssistantMessage` is a new object on every
+  // streamed flush.
+  const activeStreamId = activeAssistantMessage?.streamId
+  const activeStreamStatus = activeAssistantMessage?.streamStatus
+  const hasActiveReply = Boolean(activeAssistantMessage)
+  const canInteract = !isSubmitting && !hasActiveReply
 
   useEffect(() => {
     if (sendError && (inputValue.trim().length > 0 || attachments.length > 0)) {
@@ -296,7 +330,9 @@ export default function ChatScreen() {
   }, [thread, toast])
 
   useEffect(() => {
-    if (appState === 'active') {
+    // iOS reports `inactive` for Notification/Control Center and system
+    // prompts; only a real background transition drops the live connection.
+    if (appState !== 'background') {
       return
     }
 
@@ -305,6 +341,8 @@ export default function ChatScreen() {
       forceStopTimeoutRef.current = null
     }
     if (activeStreamRef.current?.streamId) {
+      // Re-requesting on return is safe: the server claims a stream atomically
+      // and answers duplicates with 205, so only never-claimed streams restart.
       startedStreamIdsRef.current.delete(activeStreamRef.current.streamId)
     }
     activeStreamRef.current?.abort()
@@ -350,16 +388,17 @@ export default function ChatScreen() {
   useEffect(() => {
     if (
       appState !== 'active' ||
-      !activeAssistantMessage?.streamId ||
-      activeAssistantMessage.streamStatus !== 'pending' ||
-      startedStreamIdsRef.current.has(activeAssistantMessage.streamId)
+      !activeStreamId ||
+      activeStreamStatus !== 'pending' ||
+      startedStreamIdsRef.current.has(activeStreamId)
     ) {
       return
     }
 
-    startedStreamIdsRef.current.add(activeAssistantMessage.streamId)
+    const streamId = activeStreamId
+    startedStreamIdsRef.current.add(streamId)
     setLiveStreamState({
-      streamId: activeAssistantMessage.streamId,
+      streamId,
       text: '',
       reasoningText: '',
       sources: [],
@@ -367,109 +406,91 @@ export default function ChatScreen() {
       status: 'pending',
     })
 
-    const streamHandle = startPersistentMessageStream(
-      activeAssistantMessage.streamId,
-      {
-        onTextDelta(text) {
-          setLiveStreamState((current) => {
-            if (!current || current.streamId !== activeAssistantMessage.streamId) {
-              return current
-            }
+    const updateLiveStream = (
+      updater: (current: LiveStreamState) => LiveStreamState,
+    ) => {
+      setLiveStreamState((current) =>
+        current?.streamId === streamId ? updater(current) : current,
+      )
+    }
+    const clearLiveStream = () => {
+      setLiveStreamState((current) =>
+        current?.streamId === streamId ? null : current,
+      )
+    }
+    // Coalesce token deltas so the list re-renders every ~50ms, not per token.
+    const deltaBuffer = createStreamDeltaBuffer(({ text, reasoningText }) => {
+      updateLiveStream((current) => ({
+        ...current,
+        text: current.text + text,
+        reasoningText: current.reasoningText + reasoningText,
+        status: 'streaming',
+      }))
+    })
 
-            return {
-              ...current,
-              text: current.text + text,
-              status: 'streaming',
-            }
-          })
-        },
-        onReasoningDelta(text) {
-          setLiveStreamState((current) => {
-            if (!current || current.streamId !== activeAssistantMessage.streamId) {
-              return current
-            }
-
-            return {
-              ...current,
-              reasoningText: current.reasoningText + text,
-              status: 'streaming',
-            }
-          })
-        },
-        onSource(source) {
-          setLiveStreamState((current) => {
-            if (!current || current.streamId !== activeAssistantMessage.streamId) {
-              return current
-            }
-
-            return {
-              ...current,
-              sources: mergeLiveSources(current.sources, [source]),
-              status: 'streaming',
-            }
-          })
-        },
-        onAttachment(attachment) {
-          setLiveStreamState((current) => {
-            if (!current || current.streamId !== activeAssistantMessage.streamId) {
-              return current
-            }
-
-            return {
-              ...current,
-              attachments: mergeLiveAttachments(current.attachments, [attachment]),
-              status: 'streaming',
-            }
-          })
-        },
+    const streamHandle = startPersistentMessageStream(streamId, {
+      onTextDelta: deltaBuffer.pushText,
+      onReasoningDelta: deltaBuffer.pushReasoning,
+      onSource(source) {
+        deltaBuffer.flush()
+        updateLiveStream((current) => ({
+          ...current,
+          sources: mergeLiveSources(current.sources, [source]),
+          status: 'streaming',
+        }))
       },
-    )
+      onAttachment(attachment) {
+        deltaBuffer.flush()
+        updateLiveStream((current) => ({
+          ...current,
+          attachments: mergeLiveAttachments(current.attachments, [attachment]),
+          status: 'streaming',
+        }))
+      },
+    })
     activeStreamRef.current = {
-      streamId: activeAssistantMessage.streamId,
-      abort: streamHandle.abort,
+      streamId,
+      abort: () => {
+        deltaBuffer.cancel()
+        streamHandle.abort()
+      },
     }
 
-    void streamHandle.finished.then((result: PersistentMessageStreamResult) => {
-      if (result.ok) {
-        return
-      }
-
-      if (result.errorMessage === 'Stopped generating.') {
-        setLiveStreamState((current) =>
-          current?.streamId === activeAssistantMessage.streamId ? null : current,
-        )
-        return
-      }
-
-      setLiveStreamState((current) => {
-        if (!current || current.streamId !== activeAssistantMessage.streamId) {
-          return current
+    void streamHandle.finished
+      .then((result: PersistentMessageStreamResult) => {
+        deltaBuffer.flush()
+        if (result.ok) {
+          return
         }
 
-        return {
+        if (result.failure === 'aborted' || result.failure === 'disconnected') {
+          // A dropped connection is not a failed reply: the server keeps
+          // generating, so the persisted stream status decides from here.
+          clearLiveStream()
+          return
+        }
+
+        const errorMessage = result.errorMessage ?? 'Failed to stream response.'
+        updateLiveStream((current) => ({
           ...current,
           status: 'error',
-          errorMessage:
-            result.errorMessage ?? 'Failed to stream response.',
+          errorMessage,
+        }))
+        toast.show({
+          variant: 'danger',
+          label: errorMessage,
+          duration: TOAST_DURATION_MS,
+        })
+      })
+      .catch(() => {
+        clearLiveStream()
+      })
+      .finally(() => {
+        if (activeStreamRef.current?.streamId === streamId) {
+          activeStreamRef.current = null
         }
       })
-
-      toast.show({
-        variant: 'danger',
-        label: result.errorMessage ?? 'Failed to stream response.',
-        duration: TOAST_DURATION_MS,
-      })
-    }).finally(() => {
-      if (activeStreamRef.current?.streamId === activeAssistantMessage.streamId) {
-        activeStreamRef.current = null
-      }
-    })
-  }, [
-    activeAssistantMessage?.streamId,
-    activeAssistantMessage?.streamStatus,
-    appState,
-    toast,
-  ])
+  }, [activeStreamId, activeStreamStatus, appState, toast])
 
   useEffect(() => {
     if (!liveStreamState) {
@@ -490,11 +511,11 @@ export default function ChatScreen() {
   }, [liveStreamState, messages])
 
   useEffect(() => {
-    if (forceStopTimeoutRef.current && !activeAssistantMessage?.streamId) {
+    if (forceStopTimeoutRef.current && !activeStreamId) {
       clearTimeout(forceStopTimeoutRef.current)
       forceStopTimeoutRef.current = null
     }
-  }, [activeAssistantMessage?.streamId])
+  }, [activeStreamId])
 
   useEffect(() => {
     return () => {
@@ -514,7 +535,7 @@ export default function ChatScreen() {
         webSearchMaxResults?: number
       },
     ) => {
-      if (!threadId || isSubmitting || activeAssistantMessage) {
+      if (!threadId || isSubmitting || hasActiveReply) {
         return
       }
 
@@ -531,8 +552,11 @@ export default function ChatScreen() {
         return
       }
 
-      if (attachments.length > 0 && !modelCanAcceptAttachments(model)) {
-        const message = 'This model does not support attachments.'
+      if (
+        attachments.length > 0 &&
+        !modelSupportsAttachments(model, toAttachmentKindRefs(attachments))
+      ) {
+        const message = 'This model does not support these attachments.'
         setSendError(message)
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
         toast.show({
@@ -543,16 +567,17 @@ export default function ChatScreen() {
         return
       }
 
+      const sentAttachments = attachments
       setSendError(null)
       setIsSubmitting(true)
       attachmentProgressRef.current = Object.fromEntries(
-        attachments.map((attachment) => [attachment.uri, 0]),
+        sentAttachments.map((attachment) => [attachment.uri, 0]),
       )
-      setUploadProgress(attachments.length > 0 ? 0 : null)
+      setUploadProgress(sentAttachments.length > 0 ? 0 : null)
 
       try {
         const uploadedAttachments = await uploadPickedDocuments(
-          attachments,
+          sentAttachments,
           generateAttachmentUploadUrl,
           {
             onUploadProgress: (attachmentUri, progress) => {
@@ -587,6 +612,7 @@ export default function ChatScreen() {
 
         setInputValue('')
         setAttachments([])
+        deleteLocalAttachmentCopies(sentAttachments)
 
         const createdAssistantReply = await createAssistantReply({
           threadId: threadId as Id<'threads'>,
@@ -618,11 +644,11 @@ export default function ChatScreen() {
       }
     },
     [
-      activeAssistantMessage,
       attachments,
       createAssistantReply,
       createMessage,
       generateAttachmentUploadUrl,
+      hasActiveReply,
       isSubmitting,
       model,
       threadId,
@@ -640,7 +666,7 @@ export default function ChatScreen() {
       content: string
       nextModelId: string
     }) => {
-      if (!threadId || isSubmitting || activeAssistantMessage) {
+      if (!threadId || isSubmitting || hasActiveReply) {
         return
       }
 
@@ -658,6 +684,17 @@ export default function ChatScreen() {
       }
 
       const nextModel = getModelById(nextModelId) ?? model
+
+      if (!modelSupportsAttachments(nextModel, message.attachments ?? [])) {
+        const errorMessage = 'This model does not support these attachments.'
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+        toast.show({
+          variant: 'danger',
+          label: errorMessage,
+          duration: TOAST_DURATION_MS,
+        })
+        throw new Error(errorMessage)
+      }
 
       setSendError(null)
       setIsSubmitting(true)
@@ -707,9 +744,9 @@ export default function ChatScreen() {
       }
     },
     [
-      activeAssistantMessage,
       createAssistantReply,
       editMessage,
+      hasActiveReply,
       isSubmitting,
       model,
       setModel,
@@ -718,54 +755,77 @@ export default function ChatScreen() {
     ],
   )
 
-  const handleRetryMessage = useCallback(
-    async (message: ChatMessage, overrideModelId?: string) => {
-      const retryModelId = overrideModelId ?? message.modelId ?? model.id
-      const messageIndex = messages.findIndex(
-        (threadMessage) => threadMessage.id === message.id,
-      )
-      const sourceMessage =
-        message.role === 'user'
-          ? message
-          : messageIndex >= 0
-            ? [...messages.slice(0, messageIndex)]
-                .reverse()
-                .find((threadMessage) => threadMessage.role === 'user')
-            : undefined
+  // Stable handlers for the memoized rows; they read the latest state via refs.
+  const restartFromUserMessageRef = useRef(restartFromUserMessage)
+  useEffect(() => {
+    restartFromUserMessageRef.current = restartFromUserMessage
+  }, [restartFromUserMessage])
 
+  const getRetrySourceMessage = useCallback((message: ChatMessage) => {
+    if (message.role === 'user') {
+      return message
+    }
+
+    const threadMessages = messagesRef.current
+    const messageIndex = threadMessages.findIndex(
+      (threadMessage) => threadMessage.id === message.id,
+    )
+    return messageIndex >= 0
+      ? [...threadMessages.slice(0, messageIndex)]
+          .reverse()
+          .find((threadMessage) => threadMessage.role === 'user')
+      : undefined
+  }, [])
+
+  const getRetryAttachments = useCallback(
+    (message: ChatMessage) =>
+      getRetrySourceMessage(message)?.attachments ?? EMPTY_ATTACHMENTS,
+    [getRetrySourceMessage],
+  )
+
+  const handleRetryMessage = useCallback(
+    (message: ChatMessage, overrideModelId?: string) => {
+      const sourceMessage = getRetrySourceMessage(message)
       if (!sourceMessage) {
         return
       }
 
-      await restartFromUserMessage({
-        message: sourceMessage,
-        content: sourceMessage.content,
-        nextModelId: retryModelId,
-      })
+      void restartFromUserMessageRef
+        .current({
+          message: sourceMessage,
+          content: sourceMessage.content,
+          // An unknown id falls back to the selected model.
+          nextModelId: overrideModelId ?? message.modelId ?? '',
+        })
+        .catch(() => {
+          // Already surfaced via toast and the inline send error.
+        })
     },
-    [messages, model.id, restartFromUserMessage],
+    [getRetrySourceMessage],
   )
 
   const handleEditMessage = useCallback(
     async (message: ChatMessage, nextValue: string, nextModelId: string) => {
-      await restartFromUserMessage({
+      await restartFromUserMessageRef.current({
         message,
         content: nextValue,
         nextModelId,
       })
     },
-    [restartFromUserMessage],
+    [],
   )
 
   const handleAbort = useCallback(() => {
-    if (!activeAssistantMessage?.streamId) {
+    if (!activeStreamId) {
       return
     }
 
-    const streamId = activeAssistantMessage.streamId
+    const streamId = activeStreamId
     const hasLocalDriver = activeStreamRef.current?.streamId === streamId
 
-    activeStreamRef.current?.abort()
+    if (hasLocalDriver) {
+      activeStreamRef.current?.abort()
+    }
     setLiveStreamState((current) =>
       current?.streamId === streamId ? null : current,
     )
@@ -773,52 +833,48 @@ export default function ChatScreen() {
       clearTimeout(forceStopTimeoutRef.current)
     }
 
-    void abortAssistantReply({ streamId }).finally(() => {
-      forceStopTimeoutRef.current = setTimeout(() => {
-        void forceStopAssistantReply({ streamId }).finally(() => {
-          if (forceStopTimeoutRef.current) {
-            clearTimeout(forceStopTimeoutRef.current)
-            forceStopTimeoutRef.current = null
-          }
-        })
-      }, hasLocalDriver ? 1500 : 0)
-    })
-  }, [
-    abortAssistantReply,
-    activeAssistantMessage?.streamId,
-    forceStopAssistantReply,
-  ])
+    void abortAssistantReply({ streamId })
+      .catch(() => {
+        // Fall through to the force stop below.
+      })
+      .finally(() => {
+        forceStopTimeoutRef.current = setTimeout(() => {
+          void forceStopAssistantReply({ streamId })
+            .catch(() => {
+              // The reply may already be settled.
+            })
+            .finally(() => {
+              if (forceStopTimeoutRef.current) {
+                clearTimeout(forceStopTimeoutRef.current)
+                forceStopTimeoutRef.current = null
+              }
+            })
+        }, hasLocalDriver ? 1500 : 0)
+      })
+  }, [abortAssistantReply, activeStreamId, forceStopAssistantReply])
 
   const renderMessage = useCallback(
     ({ item }: { item: ChatMessage }) => (
       <MessageBubble
         message={item}
-        onRetry={
-          !isSubmitting && !activeAssistantMessage
-            ? (message, modelId) => {
-                void handleRetryMessage(message, modelId)
-              }
-            : undefined
-        }
+        onRetry={canInteract ? handleRetryMessage : undefined}
         onSaveEdit={
-          item.role === 'user' && !isSubmitting && !activeAssistantMessage
-            ? async (message, nextValue, nextModelId) => {
-                await handleEditMessage(message, nextValue, nextModelId)
-              }
-            : undefined
+          item.role === 'user' && canInteract ? handleEditMessage : undefined
         }
+        getRetryAttachments={getRetryAttachments}
       />
     ),
-    [activeAssistantMessage, handleEditMessage, handleRetryMessage, isSubmitting],
+    [canInteract, getRetryAttachments, handleEditMessage, handleRetryMessage],
   )
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, [])
+  const getItemType = useCallback((item: ChatMessage) => item.role, [])
 
   return (
     <KeyboardAvoidingView
       className='flex-1'
       behavior='padding'
-      keyboardVerticalOffset={90}
+      keyboardVerticalOffset={headerHeight}
       style={{ backgroundColor: colors.background }}
     >
       {isLoading ? (
@@ -833,13 +889,13 @@ export default function ChatScreen() {
           data={displayedMessages}
           renderItem={renderMessage}
           keyExtractor={keyExtractor}
+          getItemType={getItemType}
           maintainVisibleContentPosition={{
             disabled: !allowAutoScroll,
             startRenderingFromBottom: true,
             autoscrollToBottomThreshold:
-              allowAutoScroll && !activeAssistantMessage ? 0.2 : undefined,
-            animateAutoScrollToBottom:
-              allowAutoScroll && !activeAssistantMessage,
+              allowAutoScroll && !hasActiveReply ? 0.2 : undefined,
+            animateAutoScrollToBottom: allowAutoScroll && !hasActiveReply,
           }}
           onScroll={handleListScroll}
           onScrollBeginDrag={handleScrollBeginDrag}
@@ -920,11 +976,12 @@ export default function ChatScreen() {
             void handleSend(message, options)
           }}
           onAbort={handleAbort}
-          isStreaming={Boolean(activeAssistantMessage)}
+          isStreaming={hasActiveReply}
           isSending={isSubmitting}
           uploadProgress={uploadProgress}
           disabled={isSubmitting}
-          canAttach={modelCanAcceptAttachments(model)}
+          supportsImages={modelSupportsImageUploads(model)}
+          supportsFiles={modelSupportsFileAttachments(model)}
         />
       </View>
     </KeyboardAvoidingView>

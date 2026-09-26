@@ -16,6 +16,7 @@ import {
 } from 'react-native'
 
 import { authClient } from '@/lib/auth-client'
+import { signOutAndWipe } from '@/lib/sign-out'
 import { useColors } from '@/lib/use-colors'
 
 type DeviceInfo = {
@@ -121,11 +122,19 @@ export default function SecurityTab() {
   const handleRevokeSession = async (session: Session) => {
     setRevokingSessionId(session.id)
     try {
-      await authClient.revokeSession({ token: session.token })
+      // better-auth returns `{ error }` instead of throwing.
+      const { error } = await authClient.revokeSession({ token: session.token })
+      if (error) {
+        throw new Error(error.message || 'Failed to revoke session.')
+      }
       setSessions((prev) => prev.filter((s) => s.id !== session.id))
       toast.show({ variant: 'success', label: 'Session revoked.' })
-    } catch {
-      toast.show({ variant: 'danger', label: 'Failed to revoke session.' })
+    } catch (error) {
+      toast.show({
+        variant: 'danger',
+        label:
+          error instanceof Error ? error.message : 'Failed to revoke session.',
+      })
     } finally {
       setRevokingSessionId(null)
     }
@@ -142,7 +151,10 @@ export default function SecurityTab() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await authClient.revokeOtherSessions()
+              const { error } = await authClient.revokeOtherSessions()
+              if (error) {
+                throw new Error(error.message || 'Failed to revoke sessions.')
+              }
               setSessions((prev) =>
                 prev.filter((s) => s.token === currentSessionToken),
               )
@@ -150,10 +162,13 @@ export default function SecurityTab() {
                 variant: 'success',
                 label: 'All other sessions revoked.',
               })
-            } catch {
+            } catch (error) {
               toast.show({
                 variant: 'danger',
-                label: 'Failed to revoke sessions.',
+                label:
+                  error instanceof Error
+                    ? error.message
+                    : 'Failed to revoke sessions.',
               })
             }
           },
@@ -168,9 +183,18 @@ export default function SecurityTab() {
     setIsDeleting(true)
     try {
       await deleteAccount({ confirmation: deleteConfirmText })
-      await authClient.deleteUser()
+      // better-auth returns `{ error }` instead of throwing; without this check
+      // a failed deletion reported success while the login still worked.
+      const { error } = await authClient.deleteUser()
+      if (error) {
+        throw new Error(
+          error.message ||
+            'Your data was removed, but the account could not be deleted. Sign in again and retry.',
+        )
+      }
       toast.show({ variant: 'success', label: 'Account deleted.' })
-      await authClient.signOut()
+      // The session is gone server-side; wipe local data even if sign-out fails.
+      await signOutAndWipe({ force: true })
     } catch (error) {
       toast.show({
         variant: 'danger',

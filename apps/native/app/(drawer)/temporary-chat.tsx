@@ -1,6 +1,7 @@
 import { api } from '@based-chat/backend/convex/_generated/api'
 import type { Id } from '@based-chat/backend/convex/_generated/dataModel'
 import { Ionicons } from '@expo/vector-icons'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { useAction, useMutation } from 'convex/react'
 import * as Haptics from 'expo-haptics'
@@ -9,6 +10,7 @@ import { useToast } from 'heroui-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  AppState,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
@@ -17,7 +19,6 @@ import {
 } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useMMKVString } from 'react-native-mmkv'
 
 import ChatInput, { type PickedDocument } from '@/components/chat/chat-input'
 import MessageBubble, {
@@ -27,15 +28,32 @@ import MessageBubble, {
 } from '@/components/chat/message-bubble'
 import { appStorage } from '@/lib/mmkv'
 import { getStoredOpenRouterApiKey } from '@/lib/api-keys'
-import { uploadPickedDocuments } from '@/lib/chat-runtime'
-import { getModelById, modelCanAcceptAttachments, type Model } from '@/lib/models'
+import {
+  deleteLocalAttachmentCopies,
+  getAttachmentKind,
+  toAttachmentKindRefs,
+  usePublishComposerAttachments,
+} from '@/lib/attachments'
+import {
+  createStreamDeltaBuffer,
+  uploadPickedDocuments,
+} from '@/lib/chat-runtime'
+import {
+  getModelById,
+  type Model,
+  modelSupportsAttachments,
+  modelSupportsFileAttachments,
+  modelSupportsImageUploads,
+} from '@/lib/models'
 import { useSelectedModel } from '@/lib/selected-model'
 import {
   createTemporaryMessageId,
   loadTemporaryChatState,
   resetTemporaryChatState,
   serializeTemporaryChatState,
+  setTemporaryChatStreaming,
   startTemporaryChatStream,
+  TEMPORARY_CHAT_MESSAGE_COUNT_KEY,
   TEMPORARY_CHAT_STORAGE_KEY,
   toDisplayedTemporaryAttachments,
   type TemporaryChatState,
@@ -45,6 +63,18 @@ import { useColors } from '@/lib/use-colors'
 
 const TOAST_DURATION_MS = 5000
 const AUTO_SCROLL_THRESHOLD = 80
+/** While a reply streams, persist at most this often instead of per token. */
+const STREAMING_PERSIST_INTERVAL_MS = 1000
+const EMPTY_ATTACHMENTS: Array<{ kind: string }> = []
+
+function persistTemporaryChatState(state: TemporaryChatState) {
+  appStorage.set(TEMPORARY_CHAT_STORAGE_KEY, serializeTemporaryChatState(state))
+
+  const messageCount = state.messages.length
+  if (appStorage.getNumber(TEMPORARY_CHAT_MESSAGE_COUNT_KEY) !== messageCount) {
+    appStorage.set(TEMPORARY_CHAT_MESSAGE_COUNT_KEY, messageCount)
+  }
+}
 
 type ImportedTemporaryThreadPayload = {
   thread: {
@@ -119,12 +149,9 @@ function EmptyState({ colors }: { colors: ReturnType<typeof useColors> }) {
 export default function TemporaryChatScreen() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
+  const headerHeight = useHeaderHeight()
   const { toast } = useToast()
   const { model, setModel } = useSelectedModel()
-  const [storedTemporaryChatState, setStoredTemporaryChatState] = useMMKVString(
-    TEMPORARY_CHAT_STORAGE_KEY,
-    appStorage,
-  )
   const listRef = useRef<FlashListRef<ChatMessage>>(null)
   const streamRef = useRef<ReturnType<typeof startTemporaryChatStream> | null>(
     null,
@@ -133,7 +160,7 @@ export default function TemporaryChatScreen() {
   const attachmentProgressRef = useRef<Record<string, number>>({})
   const isNearBottomRef = useRef(true)
   const [temporaryChatState, setTemporaryChatState] = useState<TemporaryChatState>(
-    () => loadTemporaryChatState(storedTemporaryChatState),
+    () => loadTemporaryChatState(appStorage.getString(TEMPORARY_CHAT_STORAGE_KEY)),
   )
   const [inputValue, setInputValue] = useState('')
   const [attachments, setAttachments] = useState<PickedDocument[]>([])
@@ -153,7 +180,13 @@ export default function TemporaryChatScreen() {
     (api.messages as unknown as { generateThreadTitle: any }).generateThreadTitle,
   )
 
+  usePublishComposerAttachments('temporary-chat', attachments)
+
   const messages = temporaryChatState.messages
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
   const activeAssistantMessage = useMemo(
     () =>
       [...messages]
@@ -166,6 +199,9 @@ export default function TemporaryChatScreen() {
         ),
     [messages],
   )
+  // Depend on primitives: the streaming message is a new object every flush.
+  const hasActiveReply = Boolean(activeAssistantMessage)
+  const canInteract = !isSubmitting && !hasActiveReply
 
   useEffect(() => {
     isMountedRef.current = true
@@ -177,8 +213,57 @@ export default function TemporaryChatScreen() {
   }, [])
 
   useEffect(() => {
-    setStoredTemporaryChatState(serializeTemporaryChatState(temporaryChatState))
-  }, [setStoredTemporaryChatState, temporaryChatState])
+    setTemporaryChatStreaming(hasActiveReply)
+  }, [hasActiveReply])
+
+  useEffect(() => {
+    return () => setTemporaryChatStreaming(false)
+  }, [])
+
+  // Persist immediately when messages are added or a reply settles; while a
+  // reply streams, throttle writes instead of serializing on every flush.
+  const latestStateRef = useRef(temporaryChatState)
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const persistedMessageCountRef = useRef(temporaryChatState.messages.length)
+
+  useEffect(() => {
+    latestStateRef.current = temporaryChatState
+    const messageCountChanged =
+      temporaryChatState.messages.length !== persistedMessageCountRef.current
+
+    if (!hasActiveReply || messageCountChanged) {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+      persistedMessageCountRef.current = temporaryChatState.messages.length
+      persistTemporaryChatState(temporaryChatState)
+      return
+    }
+
+    if (!persistTimerRef.current) {
+      persistTimerRef.current = setTimeout(() => {
+        persistTimerRef.current = null
+        persistTemporaryChatState(latestStateRef.current)
+      }, STREAMING_PERSIST_INTERVAL_MS)
+    }
+  }, [hasActiveReply, temporaryChatState])
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background') {
+        persistTemporaryChatState(latestStateRef.current)
+      }
+    })
+
+    return () => {
+      subscription.remove()
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (sendError && (inputValue.trim().length > 0 || attachments.length > 0)) {
@@ -294,6 +379,16 @@ export default function TemporaryChatScreen() {
       }))
 
       streamRef.current?.abort()
+      // Coalesce token deltas so the list re-renders every ~50ms, not per token.
+      const deltaBuffer = createStreamDeltaBuffer(({ text, reasoningText }) => {
+        patchTemporaryMessage(assistantMessageId, (message) => ({
+          ...message,
+          content: message.content + text,
+          reasoningText: `${message.reasoningText ?? ''}${reasoningText}`,
+          streamStatus: 'streaming',
+          updatedAt: Date.now(),
+        }))
+      })
       const stream = startTemporaryChatStream({
         modelId: nextModel.id,
         webSearchEnabled,
@@ -312,26 +407,10 @@ export default function TemporaryChatScreen() {
                 }))
               : undefined,
         })),
-        onTextDelta: (text) => {
-          patchTemporaryMessage(assistantMessageId, (message) => ({
-            ...message,
-            content: message.content + text,
-            streamStatus: 'streaming',
-            updatedAt: Date.now(),
-          }))
-        },
-        onReasoningDelta: (text) => {
-          patchTemporaryMessage(assistantMessageId, (message) => ({
-            ...message,
-            reasoningText: `${message.reasoningText ?? ''}${text}`,
-            streamStatus:
-              message.streamStatus === 'pending'
-                ? 'streaming'
-                : message.streamStatus,
-            updatedAt: Date.now(),
-          }))
-        },
+        onTextDelta: deltaBuffer.pushText,
+        onReasoningDelta: deltaBuffer.pushReasoning,
         onSource: (source) => {
+          deltaBuffer.flush()
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
             sources: mergeLiveSources(message.sources ?? [], source),
@@ -343,6 +422,7 @@ export default function TemporaryChatScreen() {
           }))
         },
         onAttachment: (attachment) => {
+          deltaBuffer.flush()
           patchTemporaryMessage(assistantMessageId, (message) => {
             if (
               (message.attachments ?? []).some(
@@ -364,6 +444,7 @@ export default function TemporaryChatScreen() {
           })
         },
         onFinish: (generationStats) => {
+          deltaBuffer.flush()
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
             streamStatus: 'done',
@@ -372,6 +453,7 @@ export default function TemporaryChatScreen() {
           }))
         },
         onError: (errorMessage) => {
+          deltaBuffer.flush()
           patchTemporaryMessage(assistantMessageId, (message) => ({
             ...message,
             streamStatus: 'error',
@@ -382,11 +464,33 @@ export default function TemporaryChatScreen() {
       })
 
       streamRef.current = stream
-      void stream.finished.finally(() => {
-        if (streamRef.current === stream) {
-          streamRef.current = null
-        }
-      })
+      void stream.finished
+        .catch((error) => {
+          // Failures normally arrive through `onError`; settle the reply here
+          // too so an unexpected throw can never leave it pending.
+          deltaBuffer.flush()
+          patchTemporaryMessage(assistantMessageId, (message) =>
+            message.streamStatus === 'pending' ||
+            message.streamStatus === 'streaming'
+              ? {
+                  ...message,
+                  streamStatus: 'error',
+                  errorMessage:
+                    message.errorMessage ??
+                    (error instanceof Error
+                      ? error.message
+                      : 'Failed to stream response.'),
+                  updatedAt: Date.now(),
+                }
+              : message,
+          )
+        })
+        .finally(() => {
+          deltaBuffer.flush()
+          if (streamRef.current === stream) {
+            streamRef.current = null
+          }
+        })
     },
     [patchTemporaryMessage],
   )
@@ -399,7 +503,7 @@ export default function TemporaryChatScreen() {
         webSearchMaxResults?: number
       },
     ) => {
-      if (isSubmitting || activeAssistantMessage) {
+      if (isSubmitting || hasActiveReply) {
         return
       }
 
@@ -416,8 +520,11 @@ export default function TemporaryChatScreen() {
         return
       }
 
-      if (attachments.length > 0 && !modelCanAcceptAttachments(model)) {
-        const errorMessage = 'This model does not support attachments.'
+      if (
+        attachments.length > 0 &&
+        !modelSupportsAttachments(model, toAttachmentKindRefs(attachments))
+      ) {
+        const errorMessage = 'This model does not support these attachments.'
         setSendError(errorMessage)
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
         toast.show({
@@ -487,6 +594,12 @@ export default function TemporaryChatScreen() {
         }))
         setInputValue('')
         setAttachments([])
+        // Image copies stay: temporary messages preview them from disk.
+        deleteLocalAttachmentCopies(
+          attachments.filter(
+            (attachment) => getAttachmentKind(attachment.mimeType) === 'file',
+          ),
+        )
 
         startTemporaryAssistantReply({
           nextModel: model,
@@ -511,9 +624,9 @@ export default function TemporaryChatScreen() {
       }
     },
     [
-      activeAssistantMessage,
       attachments,
       generateAttachmentUploadUrl,
+      hasActiveReply,
       isSubmitting,
       messages,
       model,
@@ -532,7 +645,7 @@ export default function TemporaryChatScreen() {
       content: string
       nextModelId: string
     }) => {
-      if (isSubmitting || activeAssistantMessage) {
+      if (isSubmitting || hasActiveReply) {
         return
       }
 
@@ -549,6 +662,16 @@ export default function TemporaryChatScreen() {
       }
 
       const nextModel = getModelById(nextModelId) ?? model
+      if (!modelSupportsAttachments(nextModel, message.attachments ?? [])) {
+        const errorMessage = 'This model does not support these attachments.'
+        toast.show({
+          variant: 'danger',
+          label: errorMessage,
+          duration: TOAST_DURATION_MS,
+        })
+        throw new Error(errorMessage)
+      }
+
       const trimmedContent = content.trim()
       const targetIndex = messages.findIndex(
         (threadMessage) => threadMessage.id === message.id,
@@ -586,7 +709,7 @@ export default function TemporaryChatScreen() {
       })
     },
     [
-      activeAssistantMessage,
+      hasActiveReply,
       isSubmitting,
       messages,
       model,
@@ -596,51 +719,94 @@ export default function TemporaryChatScreen() {
     ],
   )
 
-  const handleRetryMessage = useCallback(
-    async (message: ChatMessage, overrideModelId?: string) => {
-      const retryModelId = overrideModelId ?? message.modelId ?? model.id
-      const messageIndex = messages.findIndex(
-        (threadMessage) => threadMessage.id === message.id,
-      )
-      const sourceMessage =
-        message.role === 'user'
-          ? message
-          : messageIndex >= 0
-            ? [...messages.slice(0, messageIndex)]
-                .reverse()
-                .find((threadMessage) => threadMessage.role === 'user')
-            : undefined
+  // Stable handlers for the memoized rows; they read the latest state via refs.
+  const restartFromUserMessageRef = useRef(restartFromUserMessage)
+  useEffect(() => {
+    restartFromUserMessageRef.current = restartFromUserMessage
+  }, [restartFromUserMessage])
 
+  const getRetrySourceMessage = useCallback((message: ChatMessage) => {
+    if (message.role === 'user') {
+      return message
+    }
+
+    const threadMessages = messagesRef.current
+    const messageIndex = threadMessages.findIndex(
+      (threadMessage) => threadMessage.id === message.id,
+    )
+    return messageIndex >= 0
+      ? [...threadMessages.slice(0, messageIndex)]
+          .reverse()
+          .find((threadMessage) => threadMessage.role === 'user')
+      : undefined
+  }, [])
+
+  const getRetryAttachments = useCallback(
+    (message: ChatMessage) =>
+      getRetrySourceMessage(message)?.attachments ?? EMPTY_ATTACHMENTS,
+    [getRetrySourceMessage],
+  )
+
+  const handleRetryMessage = useCallback(
+    (message: ChatMessage, overrideModelId?: string) => {
+      const sourceMessage = getRetrySourceMessage(message)
       if (!sourceMessage) {
         return
       }
 
-      await restartFromUserMessage({
-        message: sourceMessage,
-        content: sourceMessage.content,
-        nextModelId: retryModelId,
-      })
+      void restartFromUserMessageRef
+        .current({
+          message: sourceMessage,
+          content: sourceMessage.content,
+          // An unknown id falls back to the selected model.
+          nextModelId: overrideModelId ?? message.modelId ?? '',
+        })
+        .catch(() => {
+          // Already surfaced via toast.
+        })
     },
-    [messages, model.id, restartFromUserMessage],
+    [getRetrySourceMessage],
   )
 
   const handleEditMessage = useCallback(
     async (message: ChatMessage, nextValue: string, nextModelId: string) => {
-      await restartFromUserMessage({
+      await restartFromUserMessageRef.current({
         message,
         content: nextValue,
         nextModelId,
       })
     },
-    [restartFromUserMessage],
+    [],
   )
 
   const handleAbort = useCallback(() => {
-    streamRef.current?.abort()
-  }, [])
+    if (streamRef.current) {
+      streamRef.current.abort()
+      return
+    }
+
+    // No live request left (it failed before streaming): settle the orphaned
+    // reply locally so the composer is not stuck.
+    const orphanedReply = [...messagesRef.current]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'system' &&
+          (message.streamStatus === 'pending' ||
+            message.streamStatus === 'streaming'),
+      )
+    if (orphanedReply) {
+      patchTemporaryMessage(orphanedReply.id, (message) => ({
+        ...message,
+        streamStatus: 'error',
+        errorMessage: message.errorMessage ?? 'Stopped generating.',
+        updatedAt: Date.now(),
+      }))
+    }
+  }, [patchTemporaryMessage])
 
   const handleSaveToHistory = useCallback(async () => {
-    if (messages.length === 0 || activeAssistantMessage || isSaving) {
+    if (messages.length === 0 || hasActiveReply || isSaving) {
       return
     }
 
@@ -683,7 +849,7 @@ export default function TemporaryChatScreen() {
           threadId: importResult.thread._id,
           messageId: firstImportedUserMessage._id,
           apiKey,
-        })
+        }).catch(() => {})
       }
 
       clearTemporaryChat()
@@ -709,9 +875,9 @@ export default function TemporaryChatScreen() {
       setIsSaving(false)
     }
   }, [
-    activeAssistantMessage,
     clearTemporaryChat,
     generateThreadTitle,
+    hasActiveReply,
     importTemporaryThread,
     isSaving,
     messages,
@@ -723,36 +889,22 @@ export default function TemporaryChatScreen() {
     ({ item }: { item: ChatMessage }) => (
       <MessageBubble
         message={item}
-        onRetry={
-          !isSubmitting && !activeAssistantMessage
-            ? (message, modelId) => {
-                void handleRetryMessage(message, modelId)
-              }
-            : undefined
-        }
-        onSaveEdit={
-          !isSubmitting && !activeAssistantMessage
-            ? (message, nextValue, nextModelId) =>
-                handleEditMessage(message, nextValue, nextModelId)
-            : undefined
-        }
+        onRetry={canInteract ? handleRetryMessage : undefined}
+        onSaveEdit={canInteract ? handleEditMessage : undefined}
+        getRetryAttachments={getRetryAttachments}
       />
     ),
-    [
-      activeAssistantMessage,
-      handleEditMessage,
-      handleRetryMessage,
-      isSubmitting,
-    ],
+    [canInteract, getRetryAttachments, handleEditMessage, handleRetryMessage],
   )
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, [])
+  const getItemType = useCallback((item: ChatMessage) => item.role, [])
 
   return (
     <KeyboardAvoidingView
       className='flex-1'
       behavior='padding'
-      keyboardVerticalOffset={90}
+      keyboardVerticalOffset={headerHeight}
       style={{ backgroundColor: colors.background }}
     >
       {messages.length === 0 ? (
@@ -763,13 +915,13 @@ export default function TemporaryChatScreen() {
           data={messages}
           renderItem={renderMessage}
           keyExtractor={keyExtractor}
+          getItemType={getItemType}
           maintainVisibleContentPosition={{
             disabled: !allowAutoScroll,
             startRenderingFromBottom: true,
             autoscrollToBottomThreshold:
-              allowAutoScroll && !activeAssistantMessage ? 0.2 : undefined,
-            animateAutoScrollToBottom:
-              allowAutoScroll && !activeAssistantMessage,
+              allowAutoScroll && !hasActiveReply ? 0.2 : undefined,
+            animateAutoScrollToBottom: allowAutoScroll && !hasActiveReply,
           }}
           onScroll={handleListScroll}
           onScrollBeginDrag={handleScrollBeginDrag}
@@ -847,7 +999,7 @@ export default function TemporaryChatScreen() {
               }}
               style={{
                 color:
-                  messages.length === 0 || activeAssistantMessage || isSaving
+                  messages.length === 0 || hasActiveReply || isSaving
                     ? `${colors.primary}66`
                     : colors.primary,
                 fontSize: 11,
@@ -891,11 +1043,12 @@ export default function TemporaryChatScreen() {
             void handleSend(message, options)
           }}
           onAbort={handleAbort}
-          isStreaming={Boolean(activeAssistantMessage)}
+          isStreaming={hasActiveReply}
           isSending={isSubmitting}
           uploadProgress={uploadProgress}
           disabled={isSubmitting}
-          canAttach={modelCanAcceptAttachments(model)}
+          supportsImages={modelSupportsImageUploads(model)}
+          supportsFiles={modelSupportsFileAttachments(model)}
         />
       </View>
     </KeyboardAvoidingView>

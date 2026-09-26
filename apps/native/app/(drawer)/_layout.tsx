@@ -28,26 +28,29 @@ function DrawerLayout() {
         name='index'
         options={{
           headerShown: true,
-          header: () => <ChatHeader />,
+          header: () => <ChatHeader composerScope='new-chat' />,
         }}
       />
       <Drawer.Screen
         name='chat/[threadId]'
         options={{
           headerShown: true,
-          header: () => <ChatHeader />,
+          header: () => <ChatHeader composerScope='thread' />,
         }}
       />
       <Drawer.Screen
         name='temporary-chat'
         options={{
           headerShown: true,
-          header: () => <ChatHeader />,
+          header: () => <ChatHeader composerScope='temporary-chat' />,
         }}
       />
       <Drawer.Screen
         name='settings'
         options={{
+          // Settings has swipeable tabs, so a full-width drawer swipe would
+          // swallow them. Restore the library's default left-edge strip.
+          swipeEdgeWidth: 32,
           headerShown: true,
           header: () => (
             <ScreenHeader title='Settings' icon='cog-outline' borderless />
