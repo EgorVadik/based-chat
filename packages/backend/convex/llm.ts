@@ -158,7 +158,12 @@ export async function getOpenRouterModelId(modelId: string) {
     fallback: DEFAULT_OPENROUTER_MODEL_IDS,
   })
 
-  return openRouterModelIds[modelId] ?? modelId
+  // A Redis map that is missing newer models must not send bare frontend ids.
+  return (
+    openRouterModelIds[modelId] ??
+    DEFAULT_OPENROUTER_MODEL_IDS[modelId] ??
+    modelId
+  )
 }
 
 export function getOpenRouterChatProviderOptions({

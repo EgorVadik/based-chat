@@ -29,6 +29,11 @@ function createAuth(ctx: GenericCtx<DataModel>) {
         : []),
     ],
     database: authComponent.adapter(ctx),
+    user: {
+      // Required for authClient.deleteUser(); without it better-auth returns
+      // NOT_FOUND and the login outlives the deleted account data.
+      deleteUser: { enabled: true },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,

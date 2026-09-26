@@ -164,6 +164,7 @@ const THREAD_TITLE_MODEL_ID = 'google/gemini-2.5-flash-lite'
 
 const internalMessages = internal.messages as unknown as {
   getAssistantReplyStopState: any
+  claimAssistantReplyStream: any
   applyGeneratedThreadTitle: any
   getStreamGenerationContext: any
   getTemporaryStreamSystemPrompt: any
@@ -339,6 +340,7 @@ async function toClientMessage(
     reasoningText?: string
     sources?: MessageSource[]
     streamId?: string
+    streamStatus?: 'done' | 'error'
     errorMessage?: string
     attachments?: StoredAttachment[]
     generationStats?: GenerationStats
@@ -346,19 +348,20 @@ async function toClientMessage(
     updatedAt?: number
   },
 ) {
-  const streamBody = message.streamId
-    ? await persistentTextStreaming.getStreamBody(
-        ctx,
-        message.streamId as StreamId,
-      )
-    : null
+  const streamBody =
+    message.streamId && !message.streamStatus
+      ? await persistentTextStreaming.getStreamBody(
+          ctx,
+          message.streamId as StreamId,
+        )
+      : null
 
   return {
     ...message,
     content: streamBody?.text ?? message.content,
     reasoningText: message.reasoningText,
     sources: message.sources ?? [],
-    streamStatus: streamBody?.status,
+    streamStatus: streamBody?.status ?? message.streamStatus,
     errorMessage: message.errorMessage,
     attachments: await resolveAttachments(ctx, message.attachments),
     generationStats: message.generationStats,
@@ -507,9 +510,12 @@ function resolveWebSearchConfig(args: {
   }
 }
 
-function shouldPersistChunk(text: string) {
-  return text.includes('.') || text.includes('!') || text.includes('?')
-}
+// Stream persistence is throttled by time/size rather than per delta: every
+// chunk or reasoning write is a mutation that re-runs live thread queries.
+const CHUNK_FLUSH_INTERVAL_MS = 400
+const CHUNK_FLUSH_MAX_CHARS = 800
+const REASONING_FLUSH_INTERVAL_MS = 1000
+const STOP_POLL_INTERVAL_MS = 1000
 
 function getGeneratedAttachmentKind(
   mediaType: string,
@@ -877,6 +883,25 @@ async function getAuthorizedThread(
   return { thread, user }
 }
 
+// For live queries: a thread deleted (or a session ended) while subscribed
+// should resolve to "nothing" instead of throwing into the client render.
+async function findAuthorizedThread(
+  ctx: QueryCtx | MutationCtx,
+  threadId: Id<'threads'>,
+) {
+  const user = await authComponent.safeGetAuthUser(ctx)
+  if (!user) {
+    return null
+  }
+
+  const thread = await ctx.db.get(threadId)
+  if (!thread || thread.userId !== user._id) {
+    return null
+  }
+
+  return thread
+}
+
 async function getUserProfilePromptContext(
   ctx: QueryCtx | MutationCtx,
   user: {
@@ -912,7 +937,9 @@ export const listByThread = query({
     threadId: v.id('threads'),
   },
   handler: async (ctx, args) => {
-    await getAuthorizedThread(ctx, args.threadId)
+    if (!(await findAuthorizedThread(ctx, args.threadId))) {
+      return []
+    }
 
     const messages = await ctx.db
       .query('messages')
@@ -934,15 +961,16 @@ export const getStreamBody = query({
   },
   handler: async (ctx, args) => {
     const message = await getMessageByStreamId(ctx, args.streamId)
-    if (!message) {
-      throw new ConvexError('Message stream not found')
+    if (!message || !(await findAuthorizedThread(ctx, message.threadId))) {
+      return null
     }
 
-    await getAuthorizedThread(ctx, message.threadId)
-    const streamBody = await persistentTextStreaming.getStreamBody(
-      ctx,
-      args.streamId as StreamId,
-    )
+    const streamBody = message.streamStatus
+      ? { text: message.content, status: message.streamStatus }
+      : await persistentTextStreaming.getStreamBody(
+          ctx,
+          args.streamId as StreamId,
+        )
     return {
       ...streamBody,
       errorMessage: message.errorMessage,
@@ -994,14 +1022,15 @@ export const getStreamGenerationContext = internalQuery({
           await Promise.all(
             threadMessages.slice(0, targetMessageIndex).map(async (message) => ({
               role: message.role,
-              content: message.streamId
-                ? (
-                    await persistentTextStreaming.getStreamBody(
-                      ctx,
-                      message.streamId as StreamId,
-                    )
-                  ).text
-                : message.content,
+              content:
+                message.streamId && !message.streamStatus
+                  ? (
+                      await persistentTextStreaming.getStreamBody(
+                        ctx,
+                        message.streamId as StreamId,
+                      )
+                    ).text
+                  : message.content,
               attachments: message.attachments,
             })),
           ),
@@ -1579,14 +1608,18 @@ export const forceStopAssistantReply = mutation({
 
     await getAuthorizedThread(ctx, message.threadId)
 
-    const streamBody = await persistentTextStreaming.getStreamBody(
-      ctx,
-      message.streamId as StreamId,
+    if (message.streamStatus) {
+      return null
+    }
+
+    const streamStatus = await ctx.runQuery(
+      persistentTextStreaming.component.lib.getStreamStatus,
+      { streamId: message.streamId as StreamId },
     )
     if (
-      streamBody.status === 'done' ||
-      streamBody.status === 'error' ||
-      streamBody.status === 'timeout'
+      streamStatus === 'done' ||
+      streamStatus === 'error' ||
+      streamStatus === 'timeout'
     ) {
       return null
     }
@@ -1615,6 +1648,9 @@ export const markAssistantReplyError = internalMutation({
   args: {
     streamId: v.string(),
     errorMessage: v.string(),
+    content: v.optional(v.string()),
+    reasoningText: v.optional(v.string()),
+    generationStats: v.optional(generationStatsValidator),
   },
   handler: async (ctx, args) => {
     const message = await getMessageByStreamId(ctx, args.streamId)
@@ -1623,7 +1659,12 @@ export const markAssistantReplyError = internalMutation({
     }
 
     await ctx.db.patch(message._id, {
-      errorMessage: args.errorMessage,
+      // Keep an explicit stop message instead of the resulting abort error.
+      errorMessage: message.errorMessage ?? args.errorMessage,
+      content: args.content ?? message.content,
+      reasoningText: args.reasoningText || message.reasoningText,
+      generationStats: args.generationStats ?? message.generationStats,
+      streamStatus: 'error',
       updatedAt: Date.now(),
     })
   },
@@ -1659,7 +1700,8 @@ export const appendAssistantReplyAttachment = internalMutation({
 export const markAssistantReplyCompleted = internalMutation({
   args: {
     streamId: v.string(),
-    generationStats: generationStatsValidator,
+    content: v.string(),
+    generationStats: v.optional(generationStatsValidator),
   },
   handler: async (ctx, args) => {
     const message = await getMessageByStreamId(ctx, args.streamId)
@@ -1668,7 +1710,9 @@ export const markAssistantReplyCompleted = internalMutation({
     }
 
     await ctx.db.patch(message._id, {
+      content: args.content,
       generationStats: args.generationStats,
+      streamStatus: 'done',
       updatedAt: Date.now(),
     })
   },
@@ -1721,16 +1765,108 @@ export const getAssistantReplyStopState = internalQuery({
     const message = await getMessageByStreamId(ctx, args.streamId)
 
     return {
-      stopRequested: Boolean(message?.stopRequestedAt),
+      // A deleted message (thread deleted, or the turn was edited away) must
+      // stop the generation instead of billing the user for an orphan reply.
+      stopRequested: !message || Boolean(message.stopRequestedAt),
       errorMessage: message?.errorMessage,
     }
   },
 })
 
+// One-off migration for replies settled before `streamStatus`/`content` were
+// persisted. Run with: npx convex run messages:backfillSettledReplies
+export const backfillSettledReplies = internalMutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query('messages')
+      .paginate({ cursor: args.cursor ?? null, numItems: 20 })
+    let updatedCount = 0
+
+    for (const message of page.page) {
+      if (!message.streamId || message.streamStatus) {
+        continue
+      }
+
+      let streamBody: Awaited<
+        ReturnType<typeof persistentTextStreaming.getStreamBody>
+      >
+      try {
+        streamBody = await persistentTextStreaming.getStreamBody(
+          ctx,
+          message.streamId as StreamId,
+        )
+      } catch {
+        continue
+      }
+      if (streamBody.status !== 'done' && streamBody.status !== 'error') {
+        continue
+      }
+
+      await ctx.db.patch(message._id, {
+        content: streamBody.text,
+        streamStatus: streamBody.status,
+      })
+      updatedCount += 1
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal.messages as unknown as { backfillSettledReplies: any })
+          .backfillSettledReplies,
+        { cursor: page.continueCursor },
+      )
+    }
+
+    return { updatedCount, isDone: page.isDone }
+  },
+})
+
+export const claimAssistantReplyStream = internalMutation({
+  args: {
+    streamId: v.string(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    // Atomically move pending -> streaming so concurrent requests for the same
+    // stream (retries, a second device) cannot start two generations.
+    const status = await ctx.runQuery(
+      persistentTextStreaming.component.lib.getStreamStatus,
+      { streamId: args.streamId as StreamId },
+    )
+    if (status !== 'pending') {
+      return false
+    }
+
+    await ctx.runMutation(persistentTextStreaming.component.lib.setStreamStatus, {
+      streamId: args.streamId as StreamId,
+      status: 'streaming',
+    })
+    return true
+  },
+})
+
+async function readJsonPayload<T>(request: Request): Promise<T | null> {
+  try {
+    return (await request.json()) as T
+  } catch {
+    return null
+  }
+}
+
 export const streamAssistantReply = httpAction(async (ctx, request) => {
-  const payload = (await request.json()) as {
+  const payload = await readJsonPayload<{
     streamId?: string
     apiKey?: string
+  }>(request)
+  if (!payload) {
+    return applyCorsHeaders(
+      new Response('Invalid JSON body', { status: 400 }),
+      request,
+    )
   }
   const streamId = payload.streamId
   const requestApiKey =
@@ -1803,54 +1939,85 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
     return applyCorsHeaders(new Response(message, { status }), request)
   }
 
-  const conversationMessages = toModelMessages(
-    await Promise.all(
-      generationContext.conversationMessages.map(async (message) => ({
-        ...message,
-        attachments: await resolveModelAttachments(ctx, message.attachments),
-      })),
-    ),
+  const claimed: boolean = await ctx.runMutation(
+    internalMessages.claimAssistantReplyStream,
+    { streamId },
   )
-  let webSearchConfig:
-    | {
-        webSearchEnabled: boolean
-        webSearchMaxResults?: number
-      }
-    | undefined
+  if (!claimed) {
+    return applyCorsHeaders(
+      new Response('', {
+        status: 205,
+      }),
+      request,
+    )
+  }
+
+  // The stream is ours from here on, so every early exit must settle it as an
+  // error; otherwise the reply shows as streaming until the timeout cron.
+  const failStream = async (errorMessage: string, status: number) => {
+    try {
+      await ctx.runMutation(
+        persistentTextStreaming.component.lib.setStreamStatus,
+        { streamId: streamId as StreamId, status: 'error' },
+      )
+      await ctx.runMutation(internalMessages.markAssistantReplyError, {
+        streamId,
+        errorMessage,
+      })
+    } catch (error) {
+      console.error('[stream:http] fail-stream-error', {
+        streamId,
+        userId: user._id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    return applyCorsHeaders(new Response(errorMessage, { status }), request)
+  }
+
+  let webSearchConfig: ReturnType<typeof resolveWebSearchConfig>
+  let openrouter: ReturnType<typeof createOpenRouter>
   try {
     webSearchConfig = resolveWebSearchConfig({
       webSearchEnabled: generationContext.webSearchEnabled,
       webSearchMaxResults: generationContext.webSearchMaxResults,
     })
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : 'Invalid web search configuration.'
-    return applyCorsHeaders(
-      new Response(errorMessage, { status: 400 }),
-      request,
-    )
-  }
-  const modelId = await getOpenRouterModelId(generationContext.modelId)
-  let openrouter: ReturnType<typeof createOpenRouter>
-  try {
     openrouter = getOpenRouter(requestApiKey)
   } catch (error) {
     const errorMessage =
-      error instanceof Error
-        ? error.message
-        : 'An OpenRouter API key is required. Add it in Settings > API Keys and try again.'
+      error instanceof Error ? error.message : 'Invalid reply configuration.'
 
-    console.warn('[stream:http] missing-provider-key', {
+    console.warn('[stream:http] invalid-request', {
       streamId,
       userId: user._id,
-      modelId,
+      error: errorMessage,
     })
 
-    return applyCorsHeaders(
-      new Response(errorMessage, { status: 400 }),
-      request,
+    return await failStream(errorMessage, 400)
+  }
+
+  let modelId: string
+  let conversationMessages: ReturnType<typeof toModelMessages>
+  try {
+    modelId = await getOpenRouterModelId(generationContext.modelId)
+    conversationMessages = toModelMessages(
+      await Promise.all(
+        generationContext.conversationMessages.map(async (message) => ({
+          ...message,
+          attachments: await resolveModelAttachments(ctx, message.attachments),
+        })),
+      ),
+    )
+  } catch (error) {
+    console.error('[stream:http] prepare-error', {
+      streamId,
+      userId: user._id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
+    return await failStream(
+      'Something went wrong while preparing the reply. Please try again.',
+      500,
     )
   }
 
@@ -1861,21 +2028,6 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
     messageCount: conversationMessages.length,
     hasOpenRouterApiKey,
   })
-
-  const streamState = await ctx.runQuery(
-    persistentTextStreaming.component.lib.getStreamStatus,
-    {
-      streamId: streamId as StreamId,
-    },
-  )
-  if (streamState !== 'pending') {
-    return applyCorsHeaders(
-      new Response('', {
-        status: 205,
-      }),
-      request,
-    )
-  }
 
   let chunkCount = 0
   let response: Response
@@ -1915,14 +2067,16 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
       let streamFailureMessage: string | undefined
       let rawStreamFailureMessage: string | undefined
       const generationStartedAt = Date.now()
-      const reasoningFlushThreshold = 96
       const generationAbortController = new AbortController()
       let firstTextDeltaAt: number | undefined
       let reasoningText = ''
       let sources: MessageSource[] = []
       let lastPersistedReasoningText = ''
+      let lastReasoningFlushAt = 0
       let costUsd: number | undefined
+      let fullText = ''
       let persistedText = ''
+      let lastChunkFlushAt = generationStartedAt
       let generatedAttachmentCount = 0
       let totalUsage:
         | {
@@ -1953,9 +2107,10 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
               error: error instanceof Error ? error.message : String(error),
             })
           })
-      }, 250)
+      }, STOP_POLL_INTERVAL_MS)
 
       const flushPersistedText = async (final = false) => {
+        lastChunkFlushAt = Date.now()
         if (!persistedText) {
           if (final) {
             await ctx.runMutation(
@@ -1977,6 +2132,35 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
         persistedText = ''
       }
 
+      // Each flush rewrites the whole reasoning string, so throttle by time to
+      // keep total bytes written roughly linear in the reasoning length.
+      const flushReasoningText = async (force = false) => {
+        if (!reasoningText || reasoningText === lastPersistedReasoningText) {
+          return
+        }
+
+        const now = Date.now()
+        if (!force && now - lastReasoningFlushAt < REASONING_FLUSH_INTERVAL_MS) {
+          return
+        }
+
+        lastPersistedReasoningText = reasoningText
+        lastReasoningFlushAt = now
+        await ctx.runMutation(internalMessages.setAssistantReplyReasoning, {
+          streamId,
+          reasoningText,
+        })
+      }
+
+      const getGenerationStats = () =>
+        buildGenerationStats({
+          startedAt: generationStartedAt,
+          firstTextDeltaAt,
+          completedAt: Date.now(),
+          costUsd,
+          totalUsage,
+        })
+
       try {
         const result = streamText({
           model: openrouter(modelId),
@@ -1995,26 +2179,6 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
             })
           },
         })
-
-        const flushReasoningText = async (force = false) => {
-          if (!reasoningText || reasoningText === lastPersistedReasoningText) {
-            return
-          }
-
-          if (
-            !force &&
-            reasoningText.length - lastPersistedReasoningText.length <
-              reasoningFlushThreshold
-          ) {
-            return
-          }
-
-          lastPersistedReasoningText = reasoningText
-          await ctx.runMutation(internalMessages.setAssistantReplyReasoning, {
-            streamId,
-            reasoningText,
-          })
-        }
 
         for await (const part of result.fullStream) {
           switch (part.type) {
@@ -2065,8 +2229,12 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
                 type: 'text-delta',
                 text: part.text,
               })
+              fullText += part.text
               persistedText += part.text
-              if (shouldPersistChunk(part.text)) {
+              if (
+                persistedText.length >= CHUNK_FLUSH_MAX_CHARS ||
+                Date.now() - lastChunkFlushAt >= CHUNK_FLUSH_INTERVAL_MS
+              ) {
                 await flushPersistedText(false)
               }
               break
@@ -2130,21 +2298,11 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
 
         await flushReasoningText(true)
         await flushPersistedText(true)
-
-        const generationStats = buildGenerationStats({
-          startedAt: generationStartedAt,
-          firstTextDeltaAt,
-          completedAt: Date.now(),
-          costUsd,
-          totalUsage,
+        await ctx.runMutation(internalMessages.markAssistantReplyCompleted, {
+          streamId,
+          content: fullText,
+          generationStats: getGenerationStats(),
         })
-
-        if (generationStats) {
-          await ctx.runMutation(internalMessages.markAssistantReplyCompleted, {
-            streamId,
-            generationStats,
-          })
-        }
 
         await closeWriter()
       } catch (error) {
@@ -2160,9 +2318,14 @@ export const streamAssistantReply = httpAction(async (ctx, request) => {
             status: 'error',
           },
         )
+        // Persist everything generated so far, including the unflushed tail
+        // and partial usage, so stopped/failed replies keep their text.
         await ctx.runMutation(internalMessages.markAssistantReplyError, {
           streamId,
           errorMessage,
+          content: fullText,
+          reasoningText: reasoningText || undefined,
+          generationStats: getGenerationStats(),
         })
         await writeEvent({
           type: 'error',
@@ -2250,19 +2413,20 @@ function isTemporaryStreamMessage(
 
 export const streamTemporaryAssistantReply = httpAction(
   async (ctx, request) => {
-    const payload = (await request.json()) as {
+    const payload = await readJsonPayload<{
       modelId?: string
       messages?: unknown
       apiKey?: string
       webSearchEnabled?: boolean
       webSearchMaxResults?: number
-    }
+    }>(request)
     const requestApiKey =
-      typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0
+      typeof payload?.apiKey === 'string' && payload.apiKey.trim().length > 0
         ? payload.apiKey.trim()
         : undefined
 
     if (
+      !payload ||
       typeof payload.modelId !== 'string' ||
       payload.modelId.trim().length === 0 ||
       !Array.isArray(payload.messages) ||
@@ -2311,16 +2475,35 @@ export const streamTemporaryAssistantReply = httpAction(
         request,
       )
     }
-  const conversationMessages = toModelMessages(
-    await Promise.all(
-      carryForwardAssistantImages(payload.messages).map(async (message) => ({
-        role: message.role,
-        content: message.content,
-        attachments: await resolveTemporaryModelAttachments(ctx, message.attachments),
-      })),
-    ),
-  )
-    const modelId = await getOpenRouterModelId(payload.modelId)
+    const temporaryMessages = payload.messages
+    let modelId: string
+    let conversationMessages: ReturnType<typeof toModelMessages>
+    try {
+      modelId = await getOpenRouterModelId(payload.modelId)
+      conversationMessages = toModelMessages(
+        await Promise.all(
+          carryForwardAssistantImages(temporaryMessages).map(
+            async (message) => ({
+              role: message.role,
+              content: message.content,
+              attachments: await resolveTemporaryModelAttachments(
+                ctx,
+                message.attachments,
+              ),
+            }),
+          ),
+        ),
+      )
+    } catch (error) {
+      console.error('[temp-stream:http] prepare-error', {
+        userId: user._id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return applyCorsHeaders(
+        new Response('Invalid temporary chat attachments', { status: 400 }),
+        request,
+      )
+    }
     let openrouter: ReturnType<typeof createOpenRouter>
     try {
       openrouter = getOpenRouter(requestApiKey)
@@ -2571,7 +2754,6 @@ export const deleteManyAttachments = mutation({
     let deletedCount = 0
 
     for (const { thread, messages } of threadEntries) {
-      let shouldPatchThread = false
       let nextTitle = thread.title
 
       for (const [index, message] of messages.entries()) {
@@ -2601,18 +2783,19 @@ export const deleteManyAttachments = mutation({
           deletedCount += 1
         }
 
-        if (index === 0) {
+        // Only refresh a title that was derived from this message (e.g. the
+        // removed file's name); never clobber a user-set or generated title.
+        if (
+          index === 0 &&
+          thread.title === deriveThreadTitle(message.content, currentAttachments)
+        ) {
           nextTitle = deriveThreadTitle(message.content, nextAttachments)
         }
-
-        shouldPatchThread = true
       }
 
-      if (shouldPatchThread) {
-        await ctx.db.patch(thread._id, {
-          updatedAt: timestamp,
-          title: nextTitle,
-        })
+      // Removing a file is not thread activity, so don't bump updatedAt.
+      if (nextTitle !== thread.title) {
+        await ctx.db.patch(thread._id, { title: nextTitle })
       }
     }
 

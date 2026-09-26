@@ -55,16 +55,18 @@ async function getThreadStreamingState(
     .order("desc")
     .first();
 
-  if (!latestMessage?.streamId) {
+  if (!latestMessage?.streamId || latestMessage.streamStatus) {
     return false;
   }
 
-  const streamBody = await persistentTextStreaming.getStreamBody(
-    ctx,
-    latestMessage.streamId as StreamId,
+  // Read only the stream status document; the full body would re-read every
+  // chunk on each streamed write for every thread in the sidebar page.
+  const streamStatus = await ctx.runQuery(
+    persistentTextStreaming.component.lib.getStreamStatus,
+    { streamId: latestMessage.streamId as StreamId },
   );
 
-  return streamBody.status === "pending" || streamBody.status === "streaming";
+  return streamStatus === "pending" || streamStatus === "streaming";
 }
 
 export const listPaginated = query({
