@@ -368,23 +368,22 @@ export default function ModelSelector({
   const { models, providers } = useModelCatalog();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [selectedFilter, setSelectedFilter] = useLocalStorage<ModelFilter>(
+  // The stored provider may only exist in the remote catalog, which loads
+  // after mount. Keep it as-is and fall back to Favorites only for display,
+  // rather than overwriting the stored choice before the catalog arrives.
+  const [storedFilter, setSelectedFilter] = useLocalStorage<ModelFilter>(
     MODEL_SELECTOR_FILTER_STORAGE_KEY,
     "favorites",
     {
-      parse: (storedFilter) => {
-        if (
-          storedFilter === "favorites" ||
-          providers.some((provider) => provider.id === storedFilter)
-        ) {
-          return storedFilter as ModelFilter;
-        }
-
-        return "favorites";
-      },
+      parse: (rawFilter) => rawFilter as ModelFilter,
       serialize: (filter) => filter,
     },
   );
+  const selectedFilter: ModelFilter =
+    storedFilter === "favorites" ||
+    providers.some((provider) => provider.id === storedFilter)
+      ? storedFilter
+      : "favorites";
   const [showLegacyModels, setShowLegacyModels] = useState(false);
   const [armedUnfavoriteModelId, setArmedUnfavoriteModelId] = useState<string | null>(
     null,
@@ -426,15 +425,6 @@ export default function ModelSelector({
 
     return () => window.clearTimeout(timer);
   }, [armedUnfavoriteModelId]);
-
-  useEffect(() => {
-    if (
-      selectedFilter !== "favorites" &&
-      !providers.some((provider) => provider.id === selectedFilter)
-    ) {
-      setSelectedFilter("favorites");
-    }
-  }, [providers, selectedFilter, setSelectedFilter]);
 
   const activeFavoriteIds = optimisticFavoriteIds ?? favoriteModelIds ?? [];
   const favoriteIdSet = useMemo(
@@ -483,24 +473,28 @@ export default function ModelSelector({
   }, [deferredSearch, hasSearch, rankedModels, selectedFilter]);
 
   const isProviderView = selectedFilter !== "favorites" && !hasSearch;
+  // Provider views and search results keep legacy models in their own group.
+  const separatesLegacyModels = isProviderView || hasSearch;
 
   const primaryModels = useMemo(() => {
-    if (!isProviderView) {
+    if (!separatesLegacyModels) {
       return filteredModels;
     }
 
     return filteredModels.filter(({ model: entry }) => !entry.isLegacy);
-  }, [filteredModels, isProviderView]);
+  }, [filteredModels, separatesLegacyModels]);
 
   const legacyModels = useMemo(() => {
-    if (!isProviderView) {
+    if (!separatesLegacyModels) {
       return [];
     }
 
     return filteredModels.filter(({ model: entry }) => entry.isLegacy);
-  }, [filteredModels, isProviderView]);
+  }, [filteredModels, separatesLegacyModels]);
 
-  const shouldShowLegacySection = isProviderView && legacyModels.length > 0;
+  const shouldShowLegacySection = separatesLegacyModels && legacyModels.length > 0;
+  // Search results show legacy matches expanded under a label; provider views
+  // keep them collapsed behind the toggle.
   const legacySectionOpen = shouldShowLegacySection && (showLegacyModels || hasSearch);
 
   const visibleModels = primaryModels;
@@ -632,7 +626,13 @@ export default function ModelSelector({
                       />
                     ))}
 
-                    {shouldShowLegacySection ? (
+                    {shouldShowLegacySection && hasSearch ? (
+                      <div className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                        Legacy models
+                      </div>
+                    ) : null}
+
+                    {shouldShowLegacySection && !hasSearch ? (
                       <div className="px-2 pb-2 pt-1">
                         <button
                           type="button"

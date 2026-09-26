@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import { authClient } from '@/lib/auth-client'
+import { clearLocalAccountState, signOut } from '@/lib/sign-out'
 
 // ─── User-Agent Parsing ──────────────────────────────────────────────
 
@@ -115,6 +116,11 @@ export default function SecurityTab() {
 
         if (cancelled) return
 
+        // better-auth reports failures as `{ error }` rather than throwing.
+        if (result.error) {
+          throw new Error(result.error.message ?? 'Failed to load sessions.')
+        }
+
         if (result.data) {
           setSessions(result.data)
         }
@@ -146,14 +152,19 @@ export default function SecurityTab() {
     setRevokingSessionId(session.id)
 
     try {
-      await authClient.revokeSession({
+      const { error } = await authClient.revokeSession({
         token: session.token,
       })
+      if (error) {
+        throw new Error(error.message ?? 'Failed to revoke session.')
+      }
 
       setSessions((prev) => prev.filter((s) => s.id !== session.id))
       toast.success('Session revoked.')
-    } catch {
-      toast.error('Failed to revoke session.')
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to revoke session.',
+      )
     } finally {
       setRevokingSessionId(null)
     }
@@ -161,12 +172,17 @@ export default function SecurityTab() {
 
   const handleRevokeOtherSessions = async () => {
     try {
-      await authClient.revokeOtherSessions()
+      const { error } = await authClient.revokeOtherSessions()
+      if (error) {
+        throw new Error(error.message ?? 'Failed to revoke sessions.')
+      }
 
       setSessions((prev) => prev.filter((s) => s.token === currentSessionToken))
       toast.success('All other sessions revoked.')
-    } catch {
-      toast.error('Failed to revoke sessions.')
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to revoke sessions.',
+      )
     }
   }
 
@@ -179,13 +195,18 @@ export default function SecurityTab() {
       // Delete all user data from Convex
       await deleteAccount({ confirmation: deleteConfirmText })
 
-      // Delete the auth user via better-auth
-      await authClient.deleteUser()
+      // Delete the auth user via better-auth (reports failure as `{ error }`)
+      const { error } = await authClient.deleteUser()
+      if (error) {
+        throw new Error(error.message ?? 'Failed to delete your login.')
+      }
 
       toast.success('Account deleted.')
 
-      // Sign out and redirect
-      await authClient.signOut()
+      // The session is gone with the user, so the sign-out request may fail;
+      // clear this browser's account state regardless, then redirect.
+      clearLocalAccountState()
+      await signOut({ notify: false })
       window.location.href = '/sign-in'
     } catch (error) {
       toast.error(

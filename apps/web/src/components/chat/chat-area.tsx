@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { useTheme } from "@/components/theme-provider";
 import {
@@ -34,20 +35,33 @@ import type {
   AttachmentUploadHandlers,
   ComposerAttachment,
   DraftAttachment,
+  MessageAttachment,
 } from "@/lib/attachments";
 import type { ChatMessage } from "@/lib/chat";
-import type { Model } from "@/lib/models";
+import { getErrorMessage } from "@/lib/errors";
+import { modelSupportsAttachments, type Model } from "@/lib/models";
 import type { ThreadSummary } from "@/lib/threads";
 
 import ChatInput from "./chat-input";
 import MessageBubble from "./message-bubble";
 
+const SUGGESTED_PROMPTS = [
+  "Explain quantum computing",
+  "Write a Python web scraper",
+  "Design a database schema",
+  "Debug my React component",
+];
+
+const NO_ATTACHMENTS: MessageAttachment[] = [];
+
 function EmptyState({
   model,
   isTemporaryChat,
+  onSelectPrompt,
 }: {
   model: Model;
   isTemporaryChat: boolean;
+  onSelectPrompt: (prompt: string) => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4">
@@ -79,18 +93,16 @@ function EmptyState({
           </p>
         </div>
         <div className="mt-2 grid w-full grid-cols-2 gap-2">
-          {[
-            "Explain quantum computing",
-            "Write a Python web scraper",
-            "Design a database schema",
-            "Debug my React component",
-          ].map((prompt) => (
-            <button
+          {SUGGESTED_PROMPTS.map((prompt) => (
+            <Button
               key={prompt}
-              className="rounded-lg border border-border/50 bg-card/30 px-3 py-2.5 text-left text-xs text-muted-foreground transition-all hover:border-border hover:bg-card/60 hover:text-foreground"
+              type="button"
+              variant="outline"
+              onClick={() => onSelectPrompt(prompt)}
+              className="h-auto justify-start truncate rounded-lg border-border/50 bg-card/30 px-3 py-2.5 text-left text-xs font-normal text-muted-foreground hover:border-border hover:bg-card/60 hover:text-foreground dark:border-border/50 dark:bg-card/30 dark:hover:bg-card/60"
             >
               {prompt}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -229,24 +241,52 @@ export default function ChatArea({
   isTemporaryChat?: boolean;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const userScrollIntentRef = useRef(false);
+  const isStreamingRef = useRef(isStreaming);
   const scrollFrameRef = useRef<number | null>(null);
   const hasMessages = messages.length > 0;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [draftMessage, setDraftMessage] = useState("");
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [editingAttachments, setEditingAttachments] = useState<ComposerAttachment[]>([]);
-  const lastMessage = messages.at(-1);
-  const lastMessageIsStreaming =
-    lastMessage?.streamStatus === "pending" ||
-    lastMessage?.streamStatus === "streaming" ||
-    lastMessage?.isStreaming;
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const isSavingEditRef = useRef(false);
+  // Message bubbles are memoized without comparing callbacks, so handlers read
+  // the latest props through this ref instead of a captured closure.
+  const latestPropsRef = useRef({ model, onEditMessage, onRetryMessage });
   const drivenStreamMessageIdSet = useMemo(
     () => new Set(drivenStreamMessageIds),
     [drivenStreamMessageIds],
   );
+  // Retrying resends the source user message, so gate retry models on its
+  // attachments (for replies: the closest preceding user message).
+  const retryAttachmentsByMessageId = useMemo(() => {
+    const attachmentsByMessageId = new Map<string, MessageAttachment[]>();
+    let sourceAttachments = NO_ATTACHMENTS;
+
+    for (const message of messages) {
+      if (message.role === "user") {
+        sourceAttachments = message.attachments;
+      }
+
+      attachmentsByMessageId.set(message.id, sourceAttachments);
+    }
+
+    return attachmentsByMessageId;
+  }, [messages]);
+
+  useEffect(() => {
+    latestPropsRef.current = { model, onEditMessage, onRetryMessage };
+  }, [model, onEditMessage, onRetryMessage]);
+
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
 
   const resetEditingState = useCallback(() => {
     setEditingAttachments((currentAttachments) => {
@@ -256,6 +296,72 @@ export default function ChatArea({
     setEditingMessageId(null);
     setEditingValue("");
     setEditingModel(null);
+  }, []);
+
+  const startEditingMessage = useCallback((message: ChatMessage) => {
+    setEditingAttachments((currentAttachments) => {
+      currentAttachments.forEach(revokeComposerAttachmentPreview);
+      return message.attachments.map(
+        createComposerAttachmentFromMessageAttachment,
+      );
+    });
+    setEditingMessageId(message.id);
+    setEditingValue(message.content);
+    setEditingModel(message.model ?? latestPropsRef.current.model);
+  }, []);
+
+  const handleRetry = useCallback((message: ChatMessage, retryModel?: Model) => {
+    void Promise.resolve()
+      .then(() => latestPropsRef.current.onRetryMessage(message, retryModel))
+      .catch((error) => {
+        toast.error(getErrorMessage(error, "Failed to retry the message."));
+      });
+  }, []);
+
+  const handleSaveEdit = (message: ChatMessage) => {
+    if (!editingMessageId || !editingModel || isSavingEditRef.current) {
+      return;
+    }
+
+    if (!editingValue.trim() && editingAttachments.length === 0) {
+      toast.error("Add a message or an attachment before saving.");
+      return;
+    }
+
+    if (!modelSupportsAttachments(editingModel, editingAttachments)) {
+      toast.error(
+        `${editingModel.name} can't accept these attachments. Remove them or pick another model.`,
+      );
+      return;
+    }
+
+    isSavingEditRef.current = true;
+    setIsSavingEdit(true);
+
+    void Promise.resolve()
+      .then(() =>
+        latestPropsRef.current.onEditMessage(
+          message,
+          editingValue,
+          editingModel,
+          editingAttachments,
+        ),
+      )
+      .then(() => {
+        resetEditingState();
+      })
+      .catch((error) => {
+        toast.error(getErrorMessage(error, "Failed to save your edit."));
+      })
+      .finally(() => {
+        isSavingEditRef.current = false;
+        setIsSavingEdit(false);
+      });
+  };
+
+  const handleSelectPrompt = useCallback((prompt: string) => {
+    setDraftMessage(prompt);
+    setComposerFocusSignal((currentSignal) => currentSignal + 1);
   }, []);
 
   const updateScrollState = useCallback(() => {
@@ -272,14 +378,48 @@ export default function ChatArea({
 
       const distanceFromBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight;
-      const isAtBottom = distanceFromBottom <= 24;
 
-      isAtBottomRef.current = isAtBottom;
+      if (distanceFromBottom <= 24) {
+        isAtBottomRef.current = true;
+        userScrollIntentRef.current = false;
+      } else if (userScrollIntentRef.current) {
+        // Only user input unpins. Programmatic scrolls (smooth animations in
+        // flight while content keeps growing) must not drop the bottom lock.
+        isAtBottomRef.current = false;
+      }
+
+      const shouldShowScrollToBottom = !isAtBottomRef.current;
       setShowScrollToBottom((currentValue) =>
-        currentValue === !isAtBottom ? currentValue : !isAtBottom,
+        currentValue === shouldShowScrollToBottom
+          ? currentValue
+          : shouldShowScrollToBottom,
       );
     });
   }, []);
+
+  const markUserScrollIntent = useCallback(() => {
+    userScrollIntentRef.current = true;
+  }, []);
+
+  const handleScrollKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof HTMLTextAreaElement ||
+        event.target instanceof HTMLInputElement
+      ) {
+        return;
+      }
+
+      if (
+        ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(
+          event.key,
+        )
+      ) {
+        markUserScrollIntent();
+      }
+    },
+    [markUserScrollIntent],
+  );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const container = scrollContainerRef.current;
@@ -292,6 +432,7 @@ export default function ChatArea({
       behavior,
     });
     isAtBottomRef.current = true;
+    userScrollIntentRef.current = false;
     setShowScrollToBottom(false);
   }, []);
 
@@ -316,20 +457,33 @@ export default function ChatArea({
     resetEditingState();
   }, [resetEditingState, thread?._id]);
 
+  // Follow content growth (streamed text, new messages, late image loads)
+  // while pinned. Streaming uses instant scrolling so it never lags behind.
   useEffect(() => {
-    if (isAtBottomRef.current) {
-      scrollToBottom("smooth");
+    const content = scrollContentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") {
       return;
     }
 
-    updateScrollState();
-  }, [
-    lastMessage?.content,
-    lastMessage?.id,
-    messages.length,
-    scrollToBottom,
-    updateScrollState,
-  ]);
+    // The first callback fires when the list first renders (e.g. after a
+    // pending thread loads); jump there instead of animating through it.
+    let isInitialObservation = true;
+    const observer = new ResizeObserver(() => {
+      const behavior =
+        isInitialObservation || isStreamingRef.current ? "auto" : "smooth";
+      isInitialObservation = false;
+
+      if (isAtBottomRef.current) {
+        scrollToBottom(behavior);
+        return;
+      }
+
+      updateScrollState();
+    });
+
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [hasMessages, scrollToBottom, updateScrollState]);
 
   return (
     <div className="relative flex h-svh flex-col">
@@ -366,64 +520,53 @@ export default function ChatArea({
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
+            onWheel={markUserScrollIntent}
+            onTouchMove={markUserScrollIntent}
+            onPointerDown={markUserScrollIntent}
+            onKeyDown={handleScrollKeyDown}
             className="thin-scrollbar h-full overflow-y-auto"
           >
-            <div className="mx-auto max-w-3xl py-4">
-              {messages.map((message) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  driveStream={drivenStreamMessageIdSet.has(message.id)}
-                  streamUrl={streamUrl}
-                  onStreamStatusChange={(status) =>
-                    onMessageStreamStatusChange(message.threadId, message.id, status)
-                  }
-                  onRetry={(model) => void onRetryMessage(message, model)}
-                  onEdit={
-                    message.role === "user"
-                      ? () => {
-                          editingAttachments.forEach(revokeComposerAttachmentPreview);
-                          setEditingMessageId(message.id);
-                          setEditingValue(message.content);
-                          setEditingModel(message.model ?? model);
-                          setEditingAttachments(
-                            message.attachments.map(
-                              createComposerAttachmentFromMessageAttachment,
-                            ),
-                          );
-                        }
-                      : undefined
-                  }
-                  isEditing={editingMessageId === message.id}
-                  editingValue={editingValue}
-                  editingModel={editingModel ?? undefined}
-                  editingAttachments={editingAttachments}
-                  onEditingValueChange={setEditingValue}
-                  onEditingModelChange={setEditingModel}
-                  onEditingAttachmentsChange={(nextAttachments) => {
-                    setEditingAttachments(nextAttachments)
-                  }}
-                  onCancelEdit={() => {
-                    resetEditingState();
-                  }}
-                  onSaveEdit={() => {
-                    if (!editingMessageId || !editingModel) {
-                      return;
-                    }
+            <div ref={scrollContentRef} className="mx-auto max-w-3xl py-4">
+              {messages.map((message) => {
+                const isEditingMessage = editingMessageId === message.id;
 
-                    void Promise.resolve(
-                      onEditMessage(
-                        message,
-                        editingValue,
-                        editingModel,
-                        editingAttachments,
-                      ),
-                    ).then(() => {
-                      resetEditingState();
-                    });
-                  }}
-                />
-              ))}
+                return (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    driveStream={drivenStreamMessageIdSet.has(message.id)}
+                    streamUrl={streamUrl}
+                    onStreamStatusChange={(status) =>
+                      onMessageStreamStatusChange(message.threadId, message.id, status)
+                    }
+                    onRetry={(retryModel) => handleRetry(message, retryModel)}
+                    retryAttachments={
+                      retryAttachmentsByMessageId.get(message.id) ?? NO_ATTACHMENTS
+                    }
+                    onEdit={
+                      message.role === "user"
+                        ? () => startEditingMessage(message)
+                        : undefined
+                    }
+                    isEditing={isEditingMessage}
+                    isSavingEdit={isEditingMessage && isSavingEdit}
+                    // Editing state only goes to the bubble being edited so
+                    // keystrokes don't re-render every other message.
+                    editingValue={isEditingMessage ? editingValue : undefined}
+                    editingModel={
+                      isEditingMessage ? (editingModel ?? undefined) : undefined
+                    }
+                    editingAttachments={
+                      isEditingMessage ? editingAttachments : undefined
+                    }
+                    onEditingValueChange={setEditingValue}
+                    onEditingModelChange={setEditingModel}
+                    onEditingAttachmentsChange={setEditingAttachments}
+                    onCancelEdit={resetEditingState}
+                    onSaveEdit={() => handleSaveEdit(message)}
+                  />
+                );
+              })}
             </div>
           </div>
           {showScrollToBottom ? (
@@ -445,7 +588,11 @@ export default function ChatArea({
       ) : isThreadPending ? (
         <ThreadPendingState />
       ) : (
-        <EmptyState model={model} isTemporaryChat={isTemporaryChat} />
+        <EmptyState
+          model={model}
+          isTemporaryChat={isTemporaryChat}
+          onSelectPrompt={handleSelectPrompt}
+        />
       )}
 
       <ChatInput
@@ -454,6 +601,7 @@ export default function ChatArea({
         value={draftMessage}
         onValueChange={setDraftMessage}
         autoFocus={!thread && !isThreadPending}
+        focusSignal={composerFocusSignal}
         resetKey={thread?._id ?? "new-thread"}
         onSend={async (message, attachments, uploadHandlers, options) => {
           await onSendMessage(message, attachments, uploadHandlers, options);

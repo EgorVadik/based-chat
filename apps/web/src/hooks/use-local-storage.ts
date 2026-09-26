@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type UseLocalStorageOptions<T> = {
   parse?: (rawValue: string) => T;
@@ -36,8 +36,18 @@ export function useLocalStorage<T>(
     }
   });
 
+  const hasHydratedRef = useRef(false);
+
   useEffect(() => {
     if (typeof window === "undefined") {
+      return;
+    }
+
+    // Skip the mount write: the initial value is either what's stored or a
+    // fallback (e.g. a model/provider the remote catalog hasn't loaded yet),
+    // and writing the fallback would erase the user's stored choice.
+    if (!hasHydratedRef.current) {
+      hasHydratedRef.current = true;
       return;
     }
 

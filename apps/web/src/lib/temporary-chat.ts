@@ -79,6 +79,33 @@ function createTemporaryChatThread(now = Date.now()): TemporaryChatThread {
   }
 }
 
+let temporaryChatStorageEpoch = 0
+// Object URLs backing temporary-chat image previews. They are owned by the
+// temporary chat (not the composer) and live until the chat is cleared.
+const temporaryAttachmentObjectUrls = new Set<string>()
+
+export function retainTemporaryAttachmentObjectUrl(file: File) {
+  const objectUrl = URL.createObjectURL(file)
+  temporaryAttachmentObjectUrls.add(objectUrl)
+  return objectUrl
+}
+
+function releaseTemporaryAttachmentObjectUrls() {
+  for (const objectUrl of temporaryAttachmentObjectUrls) {
+    URL.revokeObjectURL(objectUrl)
+  }
+  temporaryAttachmentObjectUrls.clear()
+}
+
+function rehydrateAttachment(attachment: MessageAttachment): MessageAttachment {
+  // Object URLs don't survive a reload; show "Preview unavailable" instead of
+  // a broken image.
+  return attachment.url?.startsWith('blob:') &&
+    !temporaryAttachmentObjectUrls.has(attachment.url)
+    ? { ...attachment, url: null }
+    : attachment
+}
+
 function rehydrateMessage(message: ChatMessage): ChatMessage {
   const interruptedStream =
     message.streamStatus === 'pending' || message.streamStatus === 'streaming'
@@ -86,6 +113,7 @@ function rehydrateMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     sources: message.sources ?? [],
+    attachments: (message.attachments ?? []).map(rehydrateAttachment),
     threadId: TEMPORARY_CHAT_THREAD_ID,
     model: message.modelId ? getModelById(message.modelId) : message.model,
     streamStatus: interruptedStream ? 'error' : message.streamStatus,
@@ -160,8 +188,24 @@ export function persistTemporaryChatState(state: TemporaryChatState) {
 
 export function resetTemporaryChatState(): TemporaryChatState {
   const nextState = createEmptyTemporaryChatState()
+  releaseTemporaryAttachmentObjectUrls()
   persistTemporaryChatState(nextState)
   return nextState
+}
+
+export function getTemporaryChatStorageEpoch() {
+  return temporaryChatStorageEpoch
+}
+
+// Used on sign-out. Bumping the epoch stops already-mounted workspaces from
+// writing the previous account's temporary chat back to sessionStorage.
+export function clearTemporaryChatStorage() {
+  temporaryChatStorageEpoch += 1
+  releaseTemporaryAttachmentObjectUrls()
+
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.removeItem(TEMPORARY_CHAT_STORAGE_KEY)
+  }
 }
 
 export function createTemporaryMessageId() {

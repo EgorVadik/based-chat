@@ -33,6 +33,7 @@ import {
   getModelAttachmentInputAccept,
   modelCanAcceptAttachments,
   modelSupportsAttachment,
+  modelSupportsAttachments,
   modelSupportsImageGeneration,
   type Model,
 } from '@/lib/models'
@@ -103,6 +104,7 @@ export default function ChatInput({
   disabled = false,
   isStreaming = false,
   autoFocus = false,
+  focusSignal = 0,
   className,
   resetKey,
 }: {
@@ -123,6 +125,8 @@ export default function ChatInput({
   disabled?: boolean
   isStreaming?: boolean
   autoFocus?: boolean
+  /** Changing this value focuses the textarea (cursor at the end). */
+  focusSignal?: number
   className?: string
   resetKey?: string
 }) {
@@ -191,6 +195,16 @@ export default function ChatInput({
   }, [autoFocus, disabled, isStreaming, isSubmitting, resetKey])
 
   useEffect(() => {
+    const textarea = textareaRef.current
+    if (!focusSignal || !textarea) {
+      return
+    }
+
+    textarea.focus()
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+  }, [focusSignal])
+
+  useEffect(() => {
     if (!canUseWebSearch && isWebSearchEnabled) {
       setIsWebSearchEnabled(false)
     }
@@ -215,7 +229,16 @@ export default function ChatInput({
     })
   }, [])
 
+  const previousResetKeyRef = useRef(resetKey)
+
+  // Reset only when switching threads. Keying this on `isSubmitting` too used
+  // to wipe the attachments after a failed send, which should keep the draft.
   useEffect(() => {
+    if (previousResetKeyRef.current === resetKey) {
+      return
+    }
+
+    previousResetKeyRef.current = resetKey
     if (isSubmitting) {
       return
     }
@@ -281,6 +304,15 @@ export default function ChatInput({
   const handleSend = useCallback(async () => {
     if (disabled || isSubmitting || !canSend) return
 
+    // The model can change outside the selector (retry/edit with another
+    // model, catalog refresh), so re-check pending attachments here.
+    if (!modelSupportsAttachments(model, attachments)) {
+      toast.error(
+        `${model.name} can't accept these attachments. Remove them or pick another model.`,
+      )
+      return
+    }
+
     setIsSubmitting(true)
     setUploadProgressById(
       Object.fromEntries(attachments.map((attachment) => [attachment.id, 0])),
@@ -325,12 +357,18 @@ export default function ChatInput({
     isWebSearchEnabled,
     webSearchMaxResults,
     isSubmitting,
+    model,
     onSend,
     setValue,
   ])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Enter that confirms an IME composition (CJK input) must not send.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) {
+        return
+      }
+
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
         void handleSend()
