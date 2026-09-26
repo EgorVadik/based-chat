@@ -1,4 +1,5 @@
 import { fetch as expoFetch } from 'expo/fetch'
+import { useSyncExternalStore } from 'react'
 
 import type { PickedAttachment } from '@/components/chat/chat-input'
 import type {
@@ -10,6 +11,9 @@ import { authClient } from '@/lib/auth-client'
 import { getStoredOpenRouterApiKey } from '@/lib/api-keys'
 
 export const TEMPORARY_CHAT_STORAGE_KEY = 'based-chat:temporary-chat'
+/** Small key read by the drawer so it never parses the full conversation. */
+export const TEMPORARY_CHAT_MESSAGE_COUNT_KEY =
+  'based-chat:temporary-chat:message-count'
 export const TEMPORARY_CHAT_THREAD_ID = 'temporary-chat' as const
 export const TEMPORARY_CHAT_ROUTE = '/(drawer)/temporary-chat' as const
 
@@ -169,14 +173,33 @@ export function getTemporaryChatMessageCount(
   return loadTemporaryChatState(rawState).messages.length
 }
 
-export function getTemporaryChatStreamingState(
-  rawState: string | null | undefined,
-) {
-  return loadTemporaryChatState(rawState).messages.some(
-    (message) =>
-      message.role === 'system' &&
-      (message.streamStatus === 'pending' ||
-        message.streamStatus === 'streaming'),
+// Whether a temporary reply is streaming right now. In-memory on purpose: a
+// persisted flag would survive an app kill mid-stream and stick at `true`.
+let isTemporaryChatStreaming = false
+const temporaryChatStreamingListeners = new Set<() => void>()
+
+export function setTemporaryChatStreaming(isStreaming: boolean) {
+  if (isTemporaryChatStreaming === isStreaming) {
+    return
+  }
+
+  isTemporaryChatStreaming = isStreaming
+  for (const listener of temporaryChatStreamingListeners) {
+    listener()
+  }
+}
+
+function subscribeToTemporaryChatStreaming(listener: () => void) {
+  temporaryChatStreamingListeners.add(listener)
+  return () => {
+    temporaryChatStreamingListeners.delete(listener)
+  }
+}
+
+export function useTemporaryChatStreaming() {
+  return useSyncExternalStore(
+    subscribeToTemporaryChatStreaming,
+    () => isTemporaryChatStreaming,
   )
 }
 
@@ -206,10 +229,15 @@ export function startTemporaryChatStream({
   const abortController = new AbortController()
 
   const finished = (async () => {
-    const tokenResult = await authClient.convex.token({
-      fetchOptions: { throw: false },
-    })
-    const accessToken = tokenResult.data?.token
+    let accessToken: string | undefined
+    try {
+      const tokenResult = await authClient.convex.token({
+        fetchOptions: { throw: false },
+      })
+      accessToken = tokenResult.data?.token
+    } catch {
+      // Network failures throw even with `throw: false`.
+    }
 
     if (!accessToken) {
       const errorMessage = 'Could not authenticate the temporary chat request.'

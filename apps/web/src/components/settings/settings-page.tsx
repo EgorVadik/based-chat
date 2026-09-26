@@ -8,9 +8,8 @@ import { cn } from '@based-chat/ui/lib/utils'
 import { useRouter } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
 import { ArrowLeft, Info } from 'lucide-react'
-import { toast } from 'sonner'
 
-import { authClient } from '@/lib/auth-client'
+import { signOut } from '@/lib/sign-out'
 import { SETTINGS_TABS, type SettingsTabId } from '@/lib/settings-tabs'
 
 import ProfileTab from './profile-tab'
@@ -64,16 +63,7 @@ export default function SettingsPage({
 
           <button
             onClick={() => {
-              authClient.signOut({
-                fetchOptions: {
-                  onSuccess: () => {
-                    toast.success('Signed out.')
-                  },
-                  onError: (error) => {
-                    toast.error(error.error.message || error.error.statusText)
-                  },
-                },
-              })
+              void signOut()
             }}
             className='flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer'
           >

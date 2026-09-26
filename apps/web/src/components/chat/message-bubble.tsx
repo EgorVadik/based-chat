@@ -46,9 +46,10 @@ import {
   useRef,
   useState,
 } from 'react'
+import { useQuery } from 'convex/react'
 import { toast } from 'sonner'
 
-import type { ComposerAttachment } from '@/lib/attachments'
+import type { ComposerAttachment, MessageAttachment } from '@/lib/attachments'
 import {
   isImageAttachment,
   MAX_ATTACHMENTS,
@@ -62,6 +63,7 @@ import {
   getProviderIconUrl,
   modelCanAcceptAttachments,
   modelSupportsAttachment,
+  modelSupportsAttachments,
   modelSupportsImageGeneration,
   useModelCatalog,
   type Model,
@@ -480,22 +482,48 @@ function RetryProviderLogo({
   )
 }
 
-function RetryDropdown({
+function RetryModelItem({
+  model,
+  retryAttachments,
   onRetry,
-  message,
+}: {
+  model: Model
+  retryAttachments: MessageAttachment[]
+  onRetry: (model?: Model) => void
+}) {
+  // Same rule as the model selector: a model that can't accept the resent
+  // message's attachments must not be selectable.
+  const isDisabled = !modelSupportsAttachments(model, retryAttachments)
+
+  return (
+    <DropdownMenuItem disabled={isDisabled} onClick={() => onRetry(model)}>
+      <RetryProviderLogo provider={model.provider} className='size-4' />
+      <span className='truncate'>{model.name}</span>
+      {model.capabilities.includes('reasoning') ? (
+        <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
+      ) : null}
+    </DropdownMenuItem>
+  )
+}
+
+// Rendered only while the menu is open, so closed menus on every message
+// don't hold catalog work or a favorites subscription.
+function RetryMenuItems({
+  onRetry,
+  retryAttachments,
 }: {
   onRetry: (model?: Model) => void
-  message: ChatMessage
+  retryAttachments: MessageAttachment[]
 }) {
   const catalog = useModelCatalog()
+  const favoriteModelIds = useQuery(api.favoriteModels.list, {})
 
   const favorites = useMemo(() => {
-    if (!catalog?.models) return []
-    return catalog.models.filter((m) => m.isFavorite)
-  }, [catalog?.models])
+    const favoriteIdSet = new Set(favoriteModelIds ?? [])
+    return catalog.models.filter((model) => favoriteIdSet.has(model.id))
+  }, [catalog.models, favoriteModelIds])
 
   const providerGroups = useMemo(() => {
-    if (!catalog?.models || !catalog?.providers) return []
     const currentByProvider = new Map<string, Model[]>()
     const legacyByProvider = new Map<string, Model[]>()
     for (const model of catalog.models) {
@@ -513,8 +541,94 @@ function RetryDropdown({
         models: currentByProvider.get(p.name) ?? [],
         legacyModels: legacyByProvider.get(p.name) ?? [],
       }))
-  }, [catalog?.models, catalog?.providers])
+  }, [catalog.models, catalog.providers])
 
+  return (
+    <>
+      {/* Retry same */}
+      <DropdownMenuItem onClick={() => onRetry()}>
+        <RotateCcw className='size-4 text-primary' />
+        <span>Retry same</span>
+      </DropdownMenuItem>
+
+      {/* Separator with label */}
+      <div className='flex items-center gap-3 px-2 py-1.5'>
+        <div className='h-px flex-1 bg-border/60' />
+        <span className='text-[10px] text-muted-foreground/50'>or switch model</span>
+        <div className='h-px flex-1 bg-border/60' />
+      </div>
+
+      {/* Favorites submenu */}
+      {favorites.length > 0 ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Star className='size-4 text-muted-foreground/70' />
+            <span>Favorites</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+            {favorites.map((model) => (
+              <RetryModelItem
+                key={model.id}
+                model={model}
+                retryAttachments={retryAttachments}
+                onRetry={onRetry}
+              />
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
+
+      {/* Provider submenus */}
+      {providerGroups.map(({ provider, models, legacyModels }) => (
+        <DropdownMenuSub key={provider.id}>
+          <DropdownMenuSubTrigger>
+            <RetryProviderLogo provider={provider.name} className='size-4' />
+            <span>{provider.name}</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+            {models.map((model) => (
+              <RetryModelItem
+                key={model.id}
+                model={model}
+                retryAttachments={retryAttachments}
+                onRetry={onRetry}
+              />
+            ))}
+            {legacyModels.length > 0 ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Archive className='size-4 text-muted-foreground/70' />
+                    <span>Legacy models</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
+                    {legacyModels.map((model) => (
+                      <RetryModelItem
+                        key={model.id}
+                        model={model}
+                        retryAttachments={retryAttachments}
+                        onRetry={onRetry}
+                      />
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </>
+            ) : null}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ))}
+    </>
+  )
+}
+
+function RetryDropdown({
+  onRetry,
+  retryAttachments,
+}: {
+  onRetry: (model?: Model) => void
+  retryAttachments: MessageAttachment[]
+}) {
   return (
     <DropdownMenu>
       <Tooltip>
@@ -537,91 +651,7 @@ function RetryDropdown({
         <TooltipContent side='bottom'>Retry message</TooltipContent>
       </Tooltip>
       <DropdownMenuContent side='top' align='end' className='w-56'>
-        {/* Retry same */}
-        <DropdownMenuItem onClick={() => onRetry()}>
-          <RotateCcw className='size-4 text-primary' />
-          <span>Retry same</span>
-        </DropdownMenuItem>
-
-        {/* Separator with label */}
-        <div className='flex items-center gap-3 px-2 py-1.5'>
-          <div className='h-px flex-1 bg-border/60' />
-          <span className='text-[10px] text-muted-foreground/50'>or switch model</span>
-          <div className='h-px flex-1 bg-border/60' />
-        </div>
-
-        {/* Favorites submenu */}
-        {favorites.length > 0 ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <Star className='size-4 text-muted-foreground/70' />
-              <span>Favorites</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
-              {favorites.map((model) => (
-                <DropdownMenuItem
-                  key={model.id}
-                  onClick={() => onRetry(model)}
-                >
-                  <RetryProviderLogo provider={model.provider} className='size-4' />
-                  <span className='truncate'>{model.name}</span>
-                  {model.capabilities.includes('reasoning') ? (
-                    <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
-                  ) : null}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ) : null}
-
-        {/* Provider submenus */}
-        {providerGroups.map(({ provider, models, legacyModels }) => (
-          <DropdownMenuSub key={provider.id}>
-            <DropdownMenuSubTrigger>
-              <RetryProviderLogo provider={provider.name} className='size-4' />
-              <span>{provider.name}</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
-              {models.map((model) => (
-                <DropdownMenuItem
-                  key={model.id}
-                  onClick={() => onRetry(model)}
-                >
-                  <RetryProviderLogo provider={model.provider} className='size-4' />
-                  <span className='truncate'>{model.name}</span>
-                  {model.capabilities.includes('reasoning') ? (
-                    <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
-                  ) : null}
-                </DropdownMenuItem>
-              ))}
-              {legacyModels.length > 0 ? (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Archive className='size-4 text-muted-foreground/70' />
-                      <span>Legacy models</span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className='max-h-72 w-52 overflow-y-auto'>
-                      {legacyModels.map((model) => (
-                        <DropdownMenuItem
-                          key={model.id}
-                          onClick={() => onRetry(model)}
-                        >
-                          <RetryProviderLogo provider={model.provider} className='size-4' />
-                          <span className='truncate'>{model.name}</span>
-                          {model.capabilities.includes('reasoning') ? (
-                            <Brain className='ml-auto size-3.5 text-muted-foreground/50' />
-                          ) : null}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                </>
-              ) : null}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ))}
+        <RetryMenuItems onRetry={onRetry} retryAttachments={retryAttachments} />
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -633,8 +663,10 @@ function MessageBubble({
   streamUrl,
   onStreamStatusChange,
   onRetry,
+  retryAttachments = [],
   onEdit,
   isEditing = false,
+  isSavingEdit = false,
   editingValue = '',
   editingModel,
   editingAttachments = [],
@@ -649,8 +681,10 @@ function MessageBubble({
   streamUrl: URL
   onStreamStatusChange?: (status: ChatMessage['streamStatus']) => void
   onRetry?: (model?: Model) => void
+  retryAttachments?: MessageAttachment[]
   onEdit?: () => void
   isEditing?: boolean
+  isSavingEdit?: boolean
   editingValue?: string
   editingModel?: Model
   editingAttachments?: ComposerAttachment[]
@@ -758,8 +792,12 @@ function MessageBubble({
   }, [message.streamId, onStreamStatusChange, streamStatus])
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(displayContent || reasoningText || '')
-    toast.success('Message copied')
+    try {
+      await navigator.clipboard.writeText(displayContent || reasoningText || '')
+      toast.success('Message copied')
+    } catch {
+      toast.error('Could not copy the message.')
+    }
   }
 
   const handleAddEditingFiles = (files: File[]) => {
@@ -984,6 +1022,7 @@ function MessageBubble({
                             type='button'
                             size='icon-sm'
                             onClick={onSaveEdit}
+                            disabled={isSavingEdit}
                             className='rounded-full bg-primary text-primary-foreground'
                           >
                             <ArrowUp className='size-4' />
@@ -1002,7 +1041,10 @@ function MessageBubble({
               )}
             >
               {onRetry ? (
-                <RetryDropdown onRetry={onRetry} message={message} />
+                <RetryDropdown
+                  onRetry={onRetry}
+                  retryAttachments={retryAttachments}
+                />
               ) : null}
               <Tooltip>
                 <TooltipTrigger
@@ -1059,6 +1101,7 @@ function MessageBubble({
               <>
                 <MarkdownRenderer
                   content={displayContent}
+                  isStreaming={isStreaming}
                   className='min-w-0 w-full max-w-full'
                 />
                 {hasStreamError ? (
@@ -1129,7 +1172,10 @@ function MessageBubble({
                     <TooltipContent side='bottom'>Copy message</TooltipContent>
                   </Tooltip>
                   {onRetry ? (
-                    <RetryDropdown onRetry={onRetry} message={message} />
+                    <RetryDropdown
+                      onRetry={onRetry}
+                      retryAttachments={retryAttachments}
+                    />
                   ) : null}
                 </div>
                 <div className='pointer-events-none flex flex-wrap items-center gap-x-3 gap-y-2 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/message:pointer-events-auto group-hover/message:opacity-100'>
@@ -1196,8 +1242,13 @@ function areMessageBubblePropsEqual(
     previousProps.driveStream !== nextProps.driveStream ||
     previousProps.streamUrl.href !== nextProps.streamUrl.href ||
     previousProps.isEditing !== nextProps.isEditing ||
+    previousProps.isSavingEdit !== nextProps.isSavingEdit ||
     previousProps.editingValue !== nextProps.editingValue ||
-    previousProps.editingModel?.id !== nextProps.editingModel?.id
+    previousProps.editingModel?.id !== nextProps.editingModel?.id ||
+    !areMessageAttachmentsEqual(
+      previousProps.retryAttachments ?? [],
+      nextProps.retryAttachments ?? [],
+    )
   ) {
     return false
   }

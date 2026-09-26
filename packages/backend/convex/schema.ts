@@ -53,6 +53,9 @@ export default defineSchema({
     reasoningText: v.optional(v.string()),
     sources: v.optional(v.array(sourceValidator)),
     streamId: v.optional(v.string()),
+    // Terminal stream status persisted with the final `content`, so settled
+    // replies can be read without re-assembling their stream chunks.
+    streamStatus: v.optional(v.union(v.literal("done"), v.literal("error"))),
     webSearchEnabled: v.optional(v.boolean()),
     webSearchMaxResults: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),

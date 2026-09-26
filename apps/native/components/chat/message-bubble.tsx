@@ -5,6 +5,7 @@ import {
   type BottomSheetBackdropProps,
 } from '@gorhom/bottom-sheet'
 import { Ionicons } from '@expo/vector-icons'
+import { useRecyclingState } from '@shopify/flash-list'
 import * as Clipboard from 'expo-clipboard'
 import * as Haptics from 'expo-haptics'
 import { useToast } from 'heroui-native'
@@ -27,6 +28,7 @@ import ModelSelector from '@/components/chat/model-selector'
 import {
   getModelById,
   getProviderIconUrl,
+  modelSupportsAttachments,
   useModelCatalog,
   type Model,
 } from '@/lib/models'
@@ -34,6 +36,7 @@ import { useColors } from '@/lib/use-colors'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
 const TOAST_DURATION_MS = 5000
+const EMPTY_ATTACHMENTS: Array<{ kind: string }> = []
 
 export type MessageAttachment = {
   kind: string
@@ -412,15 +415,22 @@ function RetryProviderLogo({ provider, size = 18 }: { provider: string; size?: n
 function RetryBottomSheet({
   message,
   onRetry,
+  getRetryAttachments,
 }: {
   message: ChatMessage
   onRetry: (message: ChatMessage, modelId?: string) => void
+  getRetryAttachments?: (message: ChatMessage) => Array<{ kind: string }>
 }) {
   const bottomSheetRef = useRef<BottomSheetModal>(null)
   const colors = useColors()
   const catalog = useModelCatalog()
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showLegacy, setShowLegacy] = useState<Record<string, boolean>>({})
+  // Attachments the retried turn will resend; resolved when the sheet opens.
+  const [retryAttachments, setRetryAttachments] = useState(EMPTY_ATTACHMENTS)
+  const isRetryModelDisabled = (model: Model) =>
+    retryAttachments.length > 0 &&
+    !modelSupportsAttachments(model, retryAttachments)
 
   const favorites = useMemo(() => {
     if (!catalog?.models) return []
@@ -464,8 +474,13 @@ function RetryBottomSheet({
   )
 
   const open = useCallback(() => {
+    setRetryAttachments(
+      getRetryAttachments?.(message) ??
+        (message.role === 'user' ? message.attachments : undefined) ??
+        EMPTY_ATTACHMENTS,
+    )
     bottomSheetRef.current?.present()
-  }, [])
+  }, [getRetryAttachments, message])
 
   const close = useCallback(() => {
     bottomSheetRef.current?.dismiss()
@@ -564,9 +579,11 @@ function RetryBottomSheet({
                     <Pressable
                       key={model.id}
                       onPress={() => handleSelect(model.id)}
+                      disabled={isRetryModelDisabled(model)}
                       className='flex-row items-center gap-3 py-2.5 pl-12 pr-5'
                       style={({ pressed }) => ({
                         backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                        opacity: isRetryModelDisabled(model) ? 0.4 : 1,
                       })}
                     >
                       <RetryProviderLogo provider={model.provider} size={16} />
@@ -620,9 +637,11 @@ function RetryBottomSheet({
                       <Pressable
                         key={model.id}
                         onPress={() => handleSelect(model.id)}
+                        disabled={isRetryModelDisabled(model)}
                         className='flex-row items-center gap-3 py-2.5 pl-12 pr-5'
                         style={({ pressed }) => ({
                           backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                          opacity: isRetryModelDisabled(model) ? 0.4 : 1,
                         })}
                       >
                         <RetryProviderLogo provider={model.provider} size={16} />
@@ -674,9 +693,11 @@ function RetryBottomSheet({
                               <Pressable
                                 key={model.id}
                                 onPress={() => handleSelect(model.id)}
+                                disabled={isRetryModelDisabled(model)}
                                 className='flex-row items-center gap-3 py-2.5 pl-16 pr-5'
                                 style={({ pressed }) => ({
                                   backgroundColor: pressed ? `${colors.muted}80` : 'transparent',
+                                  opacity: isRetryModelDisabled(model) ? 0.4 : 1,
                                 })}
                               >
                                 <RetryProviderLogo provider={model.provider} size={16} />
@@ -707,6 +728,7 @@ function MessageBubble({
   message,
   onRetry,
   onSaveEdit,
+  getRetryAttachments,
 }: {
   message: ChatMessage
   onRetry?: (message: ChatMessage, modelId?: string) => void
@@ -715,6 +737,8 @@ function MessageBubble({
     nextValue: string,
     nextModelId: string,
   ) => Promise<void> | void
+  /** Attachments a retry of `message` would resend (gates the model list). */
+  getRetryAttachments?: (message: ChatMessage) => Array<{ kind: string }>
 }) {
   const { defaultModel } = useModelCatalog()
   const colors = useColors()
@@ -727,14 +751,23 @@ function MessageBubble({
   const hasError =
     !isUser &&
     (message.streamStatus === 'error' || message.streamStatus === 'timeout')
-  const [showReasoning, setShowReasoning] = useState(false)
-  const [showSources, setShowSources] = useState(false)
-  const [isEditing, setIsEditing] = useState(false)
-  const [editingValue, setEditingValue] = useState(message.content)
-  const [editingModelId, setEditingModelId] = useState(
+  // FlashList recycles bubbles across messages; reset local UI state whenever
+  // the cell starts rendering a different message.
+  const [showReasoning, setShowReasoning] = useRecyclingState(false, [
+    message.id,
+  ])
+  const [showSources, setShowSources] = useRecyclingState(false, [message.id])
+  const [isEditing, setIsEditing] = useRecyclingState(false, [message.id])
+  const [editingValue, setEditingValue] = useRecyclingState(message.content, [
+    message.id,
+  ])
+  const [editingModelId, setEditingModelId] = useRecyclingState(
     message.modelId ?? defaultModel.id,
+    [message.id],
   )
-  const [isSavingEdit, setIsSavingEdit] = useState(false)
+  const [isSavingEdit, setIsSavingEdit] = useRecyclingState(false, [
+    message.id,
+  ])
   const modelLabel = message.modelName ?? message.modelId ?? 'Assistant'
   const editingModel = getModelById(editingModelId) ?? defaultModel
   const canSaveEdit =
@@ -764,10 +797,28 @@ function MessageBubble({
     setEditingValue(message.content)
     setEditingModelId(message.modelId ?? defaultModel.id)
     setIsEditing(true)
-  }, [defaultModel.id, message.content, message.modelId])
+  }, [
+    defaultModel.id,
+    message.content,
+    message.modelId,
+    setEditingModelId,
+    setEditingValue,
+    setIsEditing,
+  ])
+
+  const editAttachments = message.attachments ?? EMPTY_ATTACHMENTS
 
   const handleSaveEdit = useCallback(async () => {
     if (!onSaveEdit) {
+      return
+    }
+
+    if (!modelSupportsAttachments(editingModel, editAttachments)) {
+      toast.show({
+        variant: 'danger',
+        label: 'This model does not support these attachments.',
+        duration: TOAST_DURATION_MS,
+      })
       return
     }
 
@@ -775,10 +826,21 @@ function MessageBubble({
     try {
       await onSaveEdit(message, editingValue.trim(), editingModel.id)
       setIsEditing(false)
+    } catch {
+      // The screen already surfaced the error; keep the editor open.
     } finally {
       setIsSavingEdit(false)
     }
-  }, [editingModel.id, editingValue, message, onSaveEdit])
+  }, [
+    editAttachments,
+    editingModel,
+    editingValue,
+    message,
+    onSaveEdit,
+    setIsEditing,
+    setIsSavingEdit,
+    toast,
+  ])
 
   if (isUser) {
     return (
@@ -820,6 +882,7 @@ function MessageBubble({
                   <ModelSelector
                     model={editingModel}
                     onModelChange={(nextModel) => setEditingModelId(nextModel.id)}
+                    pendingAttachments={editAttachments}
                   />
                 </View>
                 <View className='flex-row items-center gap-2'>
@@ -865,7 +928,11 @@ function MessageBubble({
         {!isEditing ? (
           <View className='mt-2 flex-row items-center gap-1 flex-wrap justify-end'>
             {onRetry ? (
-              <RetryBottomSheet message={message} onRetry={onRetry} />
+              <RetryBottomSheet
+                message={message}
+                onRetry={onRetry}
+                getRetryAttachments={getRetryAttachments}
+              />
             ) : null}
             {onSaveEdit ? (
               <ActionButton
@@ -1057,7 +1124,11 @@ function MessageBubble({
               />
 
               {onRetry ? (
-                <RetryBottomSheet message={message} onRetry={onRetry} />
+                <RetryBottomSheet
+                  message={message}
+                  onRetry={onRetry}
+                  getRetryAttachments={getRetryAttachments}
+                />
               ) : null}
             </View>
 

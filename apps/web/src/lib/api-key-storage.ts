@@ -15,3 +15,11 @@ export function getStoredOpenRouterApiKey() {
   )
     ?? ''
 }
+
+export function clearStoredOpenRouterApiKey() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.removeItem(OPENROUTER_API_KEY_STORAGE_KEY)
+}

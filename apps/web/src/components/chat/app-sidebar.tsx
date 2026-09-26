@@ -59,7 +59,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
-import { authClient } from '@/lib/auth-client'
+import { signOut } from '@/lib/sign-out'
 import { getThreadsByTimeGroup, type ThreadSummary } from '@/lib/threads'
 import type { TemporaryChatThread } from '@/lib/temporary-chat'
 
@@ -141,7 +141,24 @@ function AppSidebar({
   }
 }) {
   const router = useRouter()
-  const groups = getThreadsByTimeGroup(threads)
+  const [threadSearch, setThreadSearch] = useState('')
+  const normalizedThreadSearch = threadSearch.trim().toLowerCase()
+  const isSearchingThreads = normalizedThreadSearch.length > 0
+  // Filters the threads loaded so far; paging stays manual while searching so
+  // an unmatched query doesn't page through the whole history.
+  const visibleThreads = useMemo(
+    () =>
+      isSearchingThreads
+        ? threads.filter((thread) =>
+            thread.title.toLowerCase().includes(normalizedThreadSearch),
+          )
+        : threads,
+    [isSearchingThreads, normalizedThreadSearch, threads],
+  )
+  const groups = useMemo(
+    () => getThreadsByTimeGroup(visibleThreads),
+    [visibleThreads],
+  )
   const loadMoreRef = useRef<HTMLDivElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const streamingThreadIdSet = useMemo(
@@ -168,7 +185,7 @@ function AppSidebar({
   const isTemporaryActionPending = pendingThreadActionId === temporaryThread._id
 
   useEffect(() => {
-    if (threadPaginationStatus !== 'CanLoadMore') {
+    if (threadPaginationStatus !== 'CanLoadMore' || isSearchingThreads) {
       return
     }
 
@@ -191,7 +208,7 @@ function AppSidebar({
     observer.observe(node)
 
     return () => observer.disconnect()
-  }, [onLoadMoreThreads, threadPaginationStatus])
+  }, [isSearchingThreads, onLoadMoreThreads, threadPaginationStatus])
 
   useEffect(() => {
     if (!renamingThreadId) {
@@ -291,7 +308,15 @@ function AppSidebar({
         <div className='relative'>
           <Search className='absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60' />
           <Input
+            value={threadSearch}
+            onChange={(event) => setThreadSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setThreadSearch('')
+              }
+            }}
             placeholder='Search threads...'
+            aria-label='Search threads'
             className='h-8 rounded-lg border-0 bg-sidebar-accent/50 pl-8 text-xs shadow-none placeholder:text-muted-foreground/40 focus-visible:bg-sidebar-accent focus-visible:ring-0 dark:bg-sidebar-accent/60'
           />
         </div>
@@ -574,7 +599,13 @@ function AppSidebar({
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
-        {threads.length === 0 &&
+        {isSearchingThreads && visibleThreads.length === 0 ? (
+          <div className='px-4 py-6 text-xs text-sidebar-foreground/50'>
+            No loaded threads match “{threadSearch.trim()}”.
+          </div>
+        ) : null}
+        {!isSearchingThreads &&
+        threads.length === 0 &&
         threadPaginationStatus !== 'LoadingFirstPage' ? (
           <div className='px-4 py-6 text-xs text-sidebar-foreground/50'>
             No threads yet.
@@ -684,18 +715,7 @@ function AppSidebar({
               <DropdownMenuItem
                 variant='destructive'
                 onClick={() => {
-                  authClient.signOut({
-                    fetchOptions: {
-                      onSuccess: () => {
-                        toast.success('Signed out.')
-                      },
-                      onError: (error) => {
-                        toast.error(
-                          error.error.message || error.error.statusText,
-                        )
-                      },
-                    },
-                  })
+                  void signOut()
                 }}
               >
                 <LogOut className='size-3.5' />

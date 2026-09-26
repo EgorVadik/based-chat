@@ -17,6 +17,22 @@ import {
   isPdfAttachment,
 } from '@/lib/attachments'
 
+// `blob:` URLs run with this app's origin, so opening a local HTML or SVG file
+// in a new tab would execute it with access to the app's storage. Only open
+// local files whose types browsers render inertly.
+function canOpenLocalAttachment(attachment: {
+  kind: 'image' | 'file'
+  contentType: string
+}) {
+  const contentType = attachment.contentType.toLowerCase()
+
+  if (attachment.kind === 'image') {
+    return !contentType.includes('svg')
+  }
+
+  return contentType === 'application/pdf' || contentType === 'text/plain'
+}
+
 type DialogAttachment = {
   id: string
   kind: 'image' | 'file'
@@ -118,6 +134,12 @@ export default function ChatAttachmentDialog({
   }, [selectedAttachment])
 
   const previewUrl = objectUrl ?? selectedAttachment?.url ?? null
+  const canOpenPreview = Boolean(
+    previewUrl &&
+      selectedAttachment &&
+      (!previewUrl.startsWith('blob:') ||
+        canOpenLocalAttachment(selectedAttachment)),
+  )
   const hasMultiple = attachments.length > 1
 
   const handleDownload = useCallback(async () => {
@@ -193,7 +215,7 @@ export default function ChatAttachmentDialog({
                 <Download className='size-3.5' />
                 <span>{isDownloading ? 'Downloading...' : 'Download'}</span>
               </Button>
-              {previewUrl ? (
+              {canOpenPreview && previewUrl ? (
                 <a
                   href={previewUrl}
                   target='_blank'

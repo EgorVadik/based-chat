@@ -11,7 +11,7 @@ import { useMutation, useQuery } from 'convex/react'
 import * as Haptics from 'expo-haptics'
 import { useToast } from 'heroui-native'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { Image, Keyboard, Platform, Pressable, Text, View, type FlatList as NativeFlatList } from 'react-native'
+import { Image, Keyboard, Platform, Pressable, Text, View } from 'react-native'
 import { FlatList as GestureHandlerFlatList } from 'react-native-gesture-handler'
 
 import { useAppTheme } from '@/contexts/app-theme-context'
@@ -21,6 +21,7 @@ import {
   getProviderIconUrl,
   type Model,
   type ModelCapability,
+  modelSupportsAttachments,
   type Provider,
   useModelCatalog,
 } from '@/lib/models'
@@ -260,7 +261,7 @@ function ProviderFilterBar({
   colors: ReturnType<typeof useColors>
   isOpen: boolean
 }) {
-  const listRef = useRef<NativeFlatList<ModelFilter>>(null)
+  const listRef = useRef<GestureHandlerFlatList<ModelFilter>>(null)
   const restoreTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([])
   const wasOpenRef = useRef(false)
   const filterItems = useMemo<ModelFilter[]>(
@@ -388,6 +389,7 @@ function ModelRow({
   providers,
   isFavorite,
   isSelected,
+  isDisabled,
   onSelect,
   onToggleFavorite,
   onShowInfo,
@@ -398,6 +400,8 @@ function ModelRow({
   providers: Provider[]
   isFavorite: boolean
   isSelected: boolean
+  /** The model cannot read the pending attachments. */
+  isDisabled: boolean
   onSelect: (model: Model) => void
   onToggleFavorite: (modelId: string, isFavorite: boolean) => void
   onShowInfo: (model: Model) => void
@@ -411,11 +415,13 @@ function ModelRow({
   return (
     <Pressable
       onPress={() => onSelect(model)}
+      disabled={isDisabled}
       className='mx-3 mb-2 rounded-2xl px-3 py-3'
       style={({ pressed }) => ({
         backgroundColor: isSelected ? `${colors.primary}12` : pressed ? colors.accent : `${colors.card}99`,
         borderWidth: 1,
         borderColor: isSelected ? `${colors.primary}4D` : `${colors.border}66`,
+        opacity: isDisabled ? 0.45 : 1,
       })}
     >
       <View className='flex-row items-start gap-3'>
@@ -551,6 +557,16 @@ function ModelRow({
               {formatModelPricing(model.pricing)}
             </Text>
           </View>
+
+          {isDisabled ? (
+            <Text
+              className='text-[10px] mt-2'
+              numberOfLines={1}
+              style={{ color: colors.mutedForeground }}
+            >
+              Not compatible with your attachments
+            </Text>
+          ) : null}
 
           {visibleCapabilities.length > 0 ? (
             <View className='flex-row flex-wrap gap-1.5 mt-2'>
@@ -773,10 +789,13 @@ export default function ModelSelector({
   model,
   onModelChange,
   placement = 'input',
+  pendingAttachments,
 }: {
   model: Model
   onModelChange: (model: Model) => void
   placement?: 'input' | 'header'
+  /** Attachments the chosen model must accept; incompatible models are disabled. */
+  pendingAttachments?: Array<{ kind: string }>
 }) {
   const { models, providers } = useModelCatalog()
   const colors = useColors()
@@ -921,13 +940,24 @@ export default function ModelSelector({
     appStorage.set(FILTER_STORAGE_KEY, filter)
   }, [])
 
+  const hasPendingAttachments = (pendingAttachments?.length ?? 0) > 0
+  const isModelDisabled = useCallback(
+    (entry: Model) =>
+      hasPendingAttachments &&
+      !modelSupportsAttachments(entry, pendingAttachments ?? []),
+    [hasPendingAttachments, pendingAttachments],
+  )
+
   const handleSelect = useCallback(
     (selected: Model) => {
+      if (isModelDisabled(selected)) {
+        return
+      }
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
       onModelChange(selected)
       setIsOpen(false)
     },
-    [onModelChange],
+    [isModelDisabled, onModelChange],
   )
 
   const handleToggleFavorite = useCallback(
@@ -1040,6 +1070,7 @@ export default function ModelSelector({
           providers={providers}
           isFavorite={item.isFavorite}
           isSelected={item.model.id === model.id}
+          isDisabled={isModelDisabled(item.model)}
           onSelect={handleSelect}
           onToggleFavorite={(id, isFavorite) => void handleToggleFavorite(id, isFavorite)}
           onShowInfo={handleShowInfo}
@@ -1053,6 +1084,7 @@ export default function ModelSelector({
       handleSelect,
       handleShowInfo,
       handleToggleFavorite,
+      isModelDisabled,
       model.id,
       pendingFavoriteIds,
       providers,

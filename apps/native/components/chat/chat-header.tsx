@@ -6,10 +6,12 @@ import {
   HeaderIconButton,
   ScreenHeader,
 } from '@/components/screen-header'
+import { type ComposerScope, useComposerAttachments } from '@/lib/attachments'
 import { useSelectedModel } from '@/lib/selected-model'
 
-export function ChatHeader() {
+export function ChatHeader({ composerScope }: { composerScope?: ComposerScope }) {
   const { model, setModel } = useSelectedModel()
+  const pendingAttachments = useComposerAttachments(composerScope)
 
   return (
     <ScreenHeader
@@ -18,6 +20,7 @@ export function ChatHeader() {
           model={model}
           onModelChange={setModel}
           placement='header'
+          pendingAttachments={pendingAttachments}
         />
       }
       rightElement={

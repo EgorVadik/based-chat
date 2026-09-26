@@ -10,9 +10,8 @@ import {
   DropdownMenuTrigger,
 } from "@based-chat/ui/components/dropdown-menu";
 import { useConvexAuth, useQuery } from "convex/react";
-import { toast } from "sonner";
 
-import { authClient } from "@/lib/auth-client";
+import { signOut } from "@/lib/sign-out";
 
 export default function UserMenu() {
   const { isAuthenticated } = useConvexAuth();
@@ -29,16 +28,7 @@ export default function UserMenu() {
           <DropdownMenuItem
             variant="destructive"
             onClick={() => {
-              authClient.signOut({
-                fetchOptions: {
-                  onSuccess: () => {
-                    toast.success("Signed out.");
-                  },
-                  onError: (error) => {
-                    toast.error(error.error.message || error.error.statusText);
-                  },
-                },
-              });
+              void signOut();
             }}
           >
             Sign Out

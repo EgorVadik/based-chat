@@ -10,7 +10,7 @@ import {
   useQuery,
 } from 'convex/react'
 import { router } from 'expo-router'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -21,16 +21,17 @@ import {
   View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useMMKVString } from 'react-native-mmkv'
+import { useMMKVNumber } from 'react-native-mmkv'
 
 import { ThemeToggle } from '@/components/theme-toggle'
-import { authClient } from '@/lib/auth-client'
 import { appStorage } from '@/lib/mmkv'
+import { signOutAndWipe } from '@/lib/sign-out'
 import {
   getTemporaryChatMessageCount,
-  getTemporaryChatStreamingState,
+  TEMPORARY_CHAT_MESSAGE_COUNT_KEY,
   TEMPORARY_CHAT_ROUTE,
   TEMPORARY_CHAT_STORAGE_KEY,
+  useTemporaryChatStreaming,
 } from '@/lib/temporary-chat'
 import { getThreadsByTimeGroup, type ThreadSummary } from '@/lib/threads'
 import { useColors } from '@/lib/use-colors'
@@ -232,51 +233,50 @@ function ThreadItem({
   )
 }
 
-function ThreadActionsMenu({
+/**
+ * One actions sheet shared by every thread row; mounting a bottom sheet per
+ * row kept dozens of hidden sheets alive in the drawer.
+ */
+function ThreadActionsSheet({
   thread,
+  isOpen,
+  onOpenChange,
   colors,
 }: {
-  thread: ThreadSummary
+  thread: ThreadSummary | null
+  isOpen: boolean
+  onOpenChange: (open: boolean) => void
   colors: ReturnType<typeof useColors>
 }) {
   const convex = useConvex()
   const renameThread = useMutation(api.threads.rename)
   const deleteManyThreads = useMutation(api.threads.deleteMany)
   const { toast } = useToast()
-  const [isOpen, setIsOpen] = useState(false)
   const [actionMode, setActionMode] = useState<ThreadActionMode>('menu')
-  const [renameValue, setRenameValue] = useState(thread.title)
+  const [renameValue, setRenameValue] = useState(thread?.title ?? '')
   const [pendingAction, setPendingAction] = useState<ThreadActionType | null>(
     null,
   )
+  const threadId = thread?._id
 
-  const resetMenuState = useCallback(() => {
-    setActionMode('menu')
-    setRenameValue(thread.title)
-  }, [thread.title])
-
-  const handleOpenMenu = useCallback(() => {
-    resetMenuState()
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-    setIsOpen(true)
-  }, [resetMenuState])
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      setIsOpen(open)
-
-      if (!open) {
-        resetMenuState()
-      }
-    },
-    [resetMenuState],
-  )
+  // Start from the menu with a fresh title whenever the sheet opens (the title
+  // is read, not tracked, so a live rename does not clobber the input).
+  useEffect(() => {
+    if (isOpen) {
+      setActionMode('menu')
+      setRenameValue(thread?.title ?? '')
+    }
+  }, [isOpen, threadId])
 
   const closeMenu = useCallback(() => {
-    setIsOpen(false)
-  }, [])
+    onOpenChange(false)
+  }, [onOpenChange])
 
   const handleRenameThread = useCallback(async () => {
+    if (!thread) {
+      return
+    }
+
     const nextTitle = renameValue.trim()
 
     if (!nextTitle) {
@@ -316,6 +316,10 @@ function ThreadActionsMenu({
   }, [closeMenu, renameThread, renameValue, thread, toast])
 
   const handleExportThread = useCallback(async () => {
+    if (!thread) {
+      return
+    }
+
     setPendingAction('export')
 
     try {
@@ -344,9 +348,13 @@ function ThreadActionsMenu({
     } finally {
       setPendingAction(null)
     }
-  }, [convex, thread, toast])
+  }, [closeMenu, convex, thread, toast])
 
   const handleDeleteThread = useCallback(() => {
+    if (!thread) {
+      return
+    }
+
     Alert.alert('Delete thread?', `Delete "${thread.title}" permanently?`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -380,20 +388,7 @@ function ThreadActionsMenu({
 
   return (
     <>
-      <ThreadItem
-        title={thread.title}
-        isStreaming={thread.isStreaming}
-        onPress={() => {
-          router.navigate({
-            pathname: '/(drawer)/chat/[threadId]',
-            params: { threadId: thread._id },
-          })
-        }}
-        onLongPress={handleOpenMenu}
-        colors={colors}
-      />
-
-      <BottomSheet isOpen={isOpen} onOpenChange={handleOpenChange}>
+      <BottomSheet isOpen={isOpen} onOpenChange={onOpenChange}>
         <BottomSheet.Portal>
           {isOpen ? (
             <>
@@ -418,7 +413,7 @@ function ThreadActionsMenu({
             handleIndicatorClassName='bg-muted'
             enablePanDownToClose
           >
-            {actionMode === 'menu' ? (
+            {!thread ? null : actionMode === 'menu' ? (
               <View className='gap-2'>
                 <View className='px-1 pb-1'>
                   <BottomSheet.Title
@@ -669,6 +664,22 @@ function SectionHeader({
 
 function UserFooter({ colors }: { colors: ReturnType<typeof useColors> }) {
   const user = useQuery(api.auth.getCurrentUser)
+  const { toast } = useToast()
+  const [isSigningOut, setIsSigningOut] = useState(false)
+
+  const handleSignOut = useCallback(async () => {
+    if (isSigningOut) {
+      return
+    }
+
+    setIsSigningOut(true)
+    const { error } = await signOutAndWipe()
+    setIsSigningOut(false)
+    if (error) {
+      toast.show({ variant: 'danger', label: error })
+    }
+  }, [isSigningOut, toast])
+
   const displayName =
     user?.name?.trim() || user?.email?.split('@')[0] || 'Signed in'
   const displayEmail = user?.email || ''
@@ -726,7 +737,10 @@ function UserFooter({ colors }: { colors: ReturnType<typeof useColors> }) {
       </View>
 
       <Pressable
-        onPress={() => authClient.signOut()}
+        onPress={() => {
+          void handleSignOut()
+        }}
+        disabled={isSigningOut}
         className='flex-row items-center gap-2 px-2 py-2 rounded-lg'
         style={({ pressed }) => ({
           backgroundColor: pressed ? `${colors.accent}80` : 'transparent',
@@ -750,18 +764,21 @@ function TemporaryChatShortcut({
 }: {
   colors: ReturnType<typeof useColors>
 }) {
-  const [storedTemporaryChatState] = useMMKVString(
-    TEMPORARY_CHAT_STORAGE_KEY,
+  // Small dedicated keys: the full conversation is only parsed once, for
+  // state saved before the count key existed.
+  const [storedMessageCount] = useMMKVNumber(
+    TEMPORARY_CHAT_MESSAGE_COUNT_KEY,
     appStorage,
   )
   const messageCount = useMemo(
-    () => getTemporaryChatMessageCount(storedTemporaryChatState),
-    [storedTemporaryChatState],
+    () =>
+      storedMessageCount ??
+      getTemporaryChatMessageCount(
+        appStorage.getString(TEMPORARY_CHAT_STORAGE_KEY),
+      ),
+    [storedMessageCount],
   )
-  const isStreaming = useMemo(
-    () => getTemporaryChatStreamingState(storedTemporaryChatState),
-    [storedTemporaryChatState],
-  )
+  const isStreaming = useTemporaryChatStreaming()
 
   return (
     <Pressable
@@ -826,6 +843,22 @@ export function DrawerContent() {
   )
 
   const groups = useMemo(() => getThreadsByTimeGroup(threads), [threads])
+  const [actionsThread, setActionsThread] = useState<ThreadSummary | null>(null)
+  const [isThreadActionsOpen, setIsThreadActionsOpen] = useState(false)
+  // Keep the sheet in sync with renames while it is open.
+  const liveActionsThread = useMemo(
+    () =>
+      (actionsThread &&
+        threads.find((thread) => thread._id === actionsThread._id)) ??
+      actionsThread,
+    [actionsThread, threads],
+  )
+
+  const openThreadActions = useCallback((thread: ThreadSummary) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    setActionsThread(thread)
+    setIsThreadActionsOpen(true)
+  }, [])
   const isLoadingFirst = status === 'LoadingFirstPage'
   const canLoadMore = status === 'CanLoadMore'
   const isLoadingMore = status === 'LoadingMore'
@@ -869,7 +902,18 @@ export function DrawerContent() {
           return <SectionHeader label={item.label} colors={colors} />
         case 'thread':
           return (
-            <ThreadActionsMenu thread={item.thread} colors={colors} />
+            <ThreadItem
+              title={item.thread.title}
+              isStreaming={item.thread.isStreaming}
+              onPress={() => {
+                router.navigate({
+                  pathname: '/(drawer)/chat/[threadId]',
+                  params: { threadId: item.thread._id },
+                })
+              }}
+              onLongPress={() => openThreadActions(item.thread)}
+              colors={colors}
+            />
           )
         case 'load-more':
           return (
@@ -897,7 +941,7 @@ export function DrawerContent() {
           )
       }
     },
-    [colors, loadMore],
+    [colors, loadMore, openThreadActions],
   )
 
   const keyExtractor = useCallback(
@@ -997,6 +1041,13 @@ export function DrawerContent() {
       >
         <UserFooter colors={colors} />
       </View>
+
+      <ThreadActionsSheet
+        thread={liveActionsThread}
+        isOpen={isThreadActionsOpen}
+        onOpenChange={setIsThreadActionsOpen}
+        colors={colors}
+      />
     </View>
   )
 }
