@@ -44,6 +44,7 @@ const DEFAULT_PROVIDERS: Provider[] = [
   { id: 'Moonshot', name: 'Moonshot' },
   { id: 'Z.ai', name: 'Z.ai' },
   { id: 'MiniMax', name: 'MiniMax' },
+  { id: 'Xiaomi', name: 'Xiaomi' },
 ] as const
 
 export const LOBE_ICON_CDN_BASE =
@@ -60,6 +61,7 @@ const DEFAULT_PROVIDER_ICON_IDS: Record<string, string> = {
   Moonshot: 'moonshot',
   'Z.ai': 'zai',
   MiniMax: 'minimax',
+  Xiaomi: 'xiaomimimo',
 }
 
 /**
@@ -79,6 +81,56 @@ export function getProviderIconUrl(
 
 const DEFAULT_MODELS: Model[] = [
   {
+    id: 'claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    provider: 'Anthropic',
+    description:
+      "Anthropic's most capable Sonnet for coding, agents, and professional work",
+    pricing: { input: 2, output: 10 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isFavorite: true,
+  },
+  {
+    id: 'claude-opus-5-5',
+    name: 'Claude Opus 5.5',
+    provider: 'Anthropic',
+    description:
+      "Anthropic's newest flagship for frontier reasoning, coding, and long-horizon agentic work",
+    pricing: { input: 4, output: 20 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'claude-fable-5-1',
+    name: 'Claude Fable 5.1',
+    provider: 'Anthropic',
+    description:
+      'Updated Mythos-class model for autonomous knowledge work, coding, and long-horizon agentic tasks',
+    pricing: { input: 10, output: 50 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'claude-opus-5',
+    name: 'Claude Opus 5',
+    provider: 'Anthropic',
+    description:
+      "Anthropic's flagship for demanding reasoning, coding, and long-horizon agentic work",
+    pricing: { input: 5, output: 25 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
+    id: 'claude-fable-5',
+    name: 'Claude Fable 5',
+    provider: 'Anthropic',
+    description:
+      'Mythos-class model for autonomous knowledge work, coding, and long-horizon agentic tasks',
+    pricing: { input: 10, output: 50 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
     id: 'claude-sonnet-4-6',
     name: 'Claude Sonnet 4.6',
     provider: 'Anthropic',
@@ -86,14 +138,14 @@ const DEFAULT_MODELS: Model[] = [
       'Balanced frontier Claude for coding, agents, and professional work',
     pricing: { input: 3, output: 15 },
     capabilities: ['image', 'reasoning', 'pdf'],
-    isFavorite: true,
+    isLegacy: true,
   },
   {
-    id: 'claude-opus-4-6',
-    name: 'Claude Opus 4.6',
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
     provider: 'Anthropic',
     description:
-      "Anthropic's strongest model for long-running coding and knowledge work",
+      "Anthropic's most capable Opus model for coding, orchestration, and high-stakes reasoning",
     pricing: { input: 5, output: 25 },
     capabilities: ['image', 'reasoning', 'pdf'],
     isLegacy: true,
@@ -106,6 +158,17 @@ const DEFAULT_MODELS: Model[] = [
       "Next-generation Opus built for long-running, asynchronous agents and complex multi-step execution",
     pricing: { input: 5, output: 25 },
     capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    provider: 'Anthropic',
+    description:
+      "Anthropic's strongest model for long-running coding and knowledge work",
+    pricing: { input: 5, output: 25 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
   },
   {
     id: 'claude-haiku-4-5',
@@ -144,6 +207,66 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
+    id: 'gpt-6-astra',
+    name: 'GPT 6 Astra',
+    provider: 'OpenAI',
+    description:
+      "OpenAI's GPT-6 flagship for deep research, software engineering, and demanding end-to-end work",
+    pricing: { input: 10, output: 50 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'gpt-6-sol',
+    name: 'GPT 6 Sol',
+    provider: 'OpenAI',
+    description:
+      'Cost-efficient high-end GPT-6 for demanding professional, coding, and agentic work',
+    pricing: { input: 2, output: 10 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+    isFavorite: true,
+  },
+  {
+    id: 'gpt-6-luna',
+    name: 'GPT 6 Luna',
+    provider: 'OpenAI',
+    description:
+      'Fast, cost-efficient GPT-6 for high-volume chat and lightweight agent workflows',
+    pricing: { input: 0.1, output: 0.5 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'gpt-5-6-terra',
+    name: 'GPT 5.6 Terra',
+    provider: 'OpenAI',
+    description:
+      'Balanced GPT-5.6 tier for everyday coding, reasoning, and agentic work',
+    pricing: { input: 2, output: 12 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+  },
+  {
+    id: 'gpt-5-6-sol',
+    name: 'GPT 5.6 Sol',
+    provider: 'OpenAI',
+    description:
+      'Flagship GPT-5.6 for complex reasoning, coding, and long-horizon agentic workflows',
+    pricing: { input: 2, output: 10 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
+    id: 'gpt-5-6-luna',
+    name: 'GPT 5.6 Luna',
+    provider: 'OpenAI',
+    description:
+      'Fast, cost-efficient GPT-5.6 for high-volume chat and lightweight agent workflows',
+    pricing: { input: 0.2, output: 1.2 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
     id: 'gpt-5-5',
     name: 'GPT 5.5',
     provider: 'OpenAI',
@@ -151,7 +274,7 @@ const DEFAULT_MODELS: Model[] = [
       "OpenAI's frontier model for complex professional workloads with stronger reasoning, reliability, and token efficiency",
     pricing: { input: 5, output: 30 },
     capabilities: ['image', 'reasoning'],
-    badge: 'NEW',
+    isLegacy: true,
   },
   {
     id: 'gpt-5-4',
@@ -161,15 +284,7 @@ const DEFAULT_MODELS: Model[] = [
       "OpenAI's latest default frontier model for coding, reasoning, and multimodal chat",
     pricing: { input: 2.5, output: 15 },
     capabilities: ['image', 'reasoning', 'pdf'],
-    isFavorite: true,
-  },
-  {
-    id: 'gpt-5-3-instant',
-    name: 'GPT 5.3 Instant',
-    provider: 'OpenAI',
-    description: 'Fast GPT-5.3 chat tier with image and PDF support',
-    pricing: { input: 1.75, output: 14 },
-    capabilities: ['image', 'pdf'],
+    isLegacy: true,
   },
   {
     id: 'gpt-5-4-mini',
@@ -203,7 +318,7 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'OpenAI',
     description:
       'Open-weight reasoning model optimized for low-cost local-style usage',
-    pricing: { input: 0.03, output: 0.14 },
+    pricing: { input: 0.02, output: 0.09 },
     capabilities: ['reasoning'],
   },
   {
@@ -212,7 +327,7 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'OpenAI',
     description:
       'Larger open-weight OpenAI reasoning model with stronger quality than 20B',
-    pricing: { input: 0.04, output: 0.19 },
+    pricing: { input: 0.15, output: 0.6 },
     capabilities: ['reasoning'],
   },
   {
@@ -336,6 +451,46 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
+    id: 'gemini-3-8-flash',
+    name: 'Gemini 3.8 Flash',
+    provider: 'Google',
+    description:
+      "Google's latest Flash for fast multimodal reasoning, coding, and agentic work",
+    pricing: { input: 0.75, output: 3.75 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'gemini-3-5-flash-lite',
+    name: 'Gemini 3.5 Flash Lite',
+    provider: 'Google',
+    description:
+      'Low-latency Gemini 3.5 tier for cost-efficient multimodal workloads',
+    pricing: { input: 0.3, output: 2.5 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'nano-banana-2',
+    name: 'Nano Banana 2',
+    provider: 'Google',
+    description:
+      'Pro-level image generation and editing at Flash speed, built on Gemini 3.1 Flash',
+    pricing: { input: 0.5, output: 3 },
+    capabilities: ['image', 'image-gen'],
+    badge: 'NEW',
+  },
+  {
+    id: 'gemini-3-5-flash',
+    name: 'Gemini 3.5 Flash',
+    provider: 'Google',
+    description:
+      'High-efficiency multimodal Flash with near-Pro coding, reasoning, and agentic speed',
+    pricing: { input: 1.5, output: 9 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    isLegacy: true,
+  },
+  {
     id: 'gemini-3-1-pro-preview',
     name: 'Gemini 3.1 Pro',
     provider: 'Google',
@@ -378,15 +533,6 @@ const DEFAULT_MODELS: Model[] = [
     capabilities: ['image', 'image-gen'],
   },
   {
-    id: 'gemini-3-pro',
-    name: 'Gemini 3 Pro',
-    provider: 'Google',
-    description: "Google's previous flagship with advanced reasoning",
-    pricing: { input: 2, output: 12 },
-    capabilities: ['image', 'reasoning', 'pdf'],
-    isLegacy: true,
-  },
-  {
     id: 'gemini-2-5-pro',
     name: 'Gemini 2.5 Pro',
     provider: 'Google',
@@ -414,21 +560,23 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
-    id: 'gemini-2-0-flash',
-    name: 'Gemini 2.0 Flash',
-    provider: 'Google',
-    description: "Google's speedy all-rounder with massive context",
-    pricing: { input: 0.1, output: 0.4 },
-    capabilities: ['image', 'pdf'],
-    isLegacy: true,
+    id: 'grok-4-7',
+    name: 'Grok 4.7',
+    provider: 'xAI',
+    description:
+      "xAI's flagship for long-running coding, agentic tasks, and knowledge work",
+    pricing: { input: 1.6, output: 4.8 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
   },
   {
-    id: 'gemini-2-0-flash-lite',
-    name: 'Gemini 2.0 Flash Lite',
-    provider: 'Google',
-    description: 'Faster, less precise Gemini model',
-    pricing: { input: 0.08, output: 0.3 },
-    capabilities: ['image', 'pdf'],
+    id: 'grok-4-5',
+    name: 'Grok 4.5',
+    provider: 'xAI',
+    description:
+      "xAI's smartest model with frontier performance on coding, knowledge work, and STEM",
+    pricing: { input: 2, output: 6 },
+    capabilities: ['image', 'reasoning', 'pdf'],
     isLegacy: true,
   },
   {
@@ -437,68 +585,47 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'xAI',
     description:
       "xAI's newest flagship with industry-leading speed and agentic tool calling",
-    pricing: { input: 2, output: 6 },
-    capabilities: ['image', 'reasoning'],
-  },
-  {
-    id: 'grok-4-1-fast',
-    name: 'Grok 4.1 Fast',
-    provider: 'xAI',
-    description: 'Faster and cheaper version of Grok v4.1',
-    pricing: { input: 0.2, output: 0.5 },
-    capabilities: ['image', 'reasoning'],
-  },
-  {
-    id: 'grok-4',
-    name: 'Grok 4',
-    provider: 'xAI',
-    description: "xAI's latest and greatest model",
-    pricing: { input: 3, output: 15 },
+    pricing: { input: 1.25, output: 2.5 },
     capabilities: ['image', 'reasoning'],
     isLegacy: true,
   },
   {
-    id: 'grok-4-fast',
-    name: 'Grok 4 Fast',
-    provider: 'xAI',
-    description: 'Faster and cheaper version of Grok v4',
-    pricing: { input: 0.2, output: 0.5 },
+    id: 'muse-spark-1-3',
+    name: 'Muse Spark 1.3',
+    provider: 'Meta',
+    description:
+      "Meta's multimodal reasoning model for long-running agentic, multi-agent, and coding workflows",
+    pricing: { input: 1.25, output: 4.25 },
+    capabilities: ['image', 'reasoning', 'pdf'],
+    badge: 'NEW',
+  },
+  {
+    id: 'muse-glimmer-30b',
+    name: 'Muse Glimmer 30B',
+    provider: 'Meta',
+    description:
+      'Open-weight multimodal model distilled from Muse Spark for efficient autonomous agents',
+    pricing: { input: 0.3, output: 1.2 },
     capabilities: ['image', 'reasoning'],
-    isLegacy: true,
-  },
-  {
-    id: 'grok-3',
-    name: 'Grok 3',
-    provider: 'xAI',
-    description: "xAI's last-gen model that doesn't think and costs too much",
-    pricing: { input: 3, output: 15 },
-    capabilities: [],
-    isLegacy: true,
-  },
-  {
-    id: 'grok-3-mini',
-    name: 'Grok 3 Mini',
-    provider: 'xAI',
-    description: "xAI's last-gen model that thinks for cheap",
-    pricing: { input: 0.3, output: 0.5 },
-    capabilities: ['reasoning'],
-    isLegacy: true,
+    badge: 'NEW',
   },
   {
     id: 'llama-4-scout',
     name: 'Llama 4 Scout',
     provider: 'Meta',
     description: 'Efficient multimodal explorer',
-    pricing: { input: 0.08, output: 0.3 },
+    pricing: { input: 0.1, output: 0.3 },
     capabilities: ['image'],
+    isLegacy: true,
   },
   {
     id: 'llama-4-maverick',
     name: 'Llama 4 Maverick',
     provider: 'Meta',
     description: 'The capable conversationalist',
-    pricing: { input: 0.15, output: 0.6 },
+    pricing: { input: 0.19, output: 0.65 },
     capabilities: ['image'],
+    isLegacy: true,
   },
   {
     id: 'llama-3-3-70b',
@@ -515,8 +642,17 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'DeepSeek',
     description:
       'Large-scale MoE model for advanced reasoning, coding, and long-horizon agent workflows',
-    pricing: { input: 1.74, output: 3.48 },
+    pricing: { input: 0.35, output: 0.7 },
     capabilities: ['reasoning'],
+  },
+  {
+    id: 'deepseek-v4-1-flash',
+    name: 'DeepSeek V4.1 Flash',
+    provider: 'DeepSeek',
+    description:
+      'First DeepSeek model on the Causal Encoder-Decoder architecture with fast multimodal reasoning',
+    pricing: { input: 0.3, output: 1.2 },
+    capabilities: ['image', 'reasoning'],
     badge: 'NEW',
   },
   {
@@ -525,9 +661,8 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'DeepSeek',
     description:
       'Efficiency-optimized MoE model for fast inference, high-throughput workloads, and strong reasoning performance',
-    pricing: { input: 0.14, output: 0.28 },
+    pricing: { input: 0.05, output: 0.09 },
     capabilities: ['reasoning'],
-    badge: 'NEW',
   },
   {
     id: 'deepseek-v3-2',
@@ -535,7 +670,7 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'DeepSeek',
     description:
       'Latest DeepSeek release with low-cost reasoning and agentic performance',
-    pricing: { input: 0.26, output: 0.38 },
+    pricing: { input: 0.27, output: 0.4 },
     capabilities: ['reasoning'],
   },
   {
@@ -543,7 +678,7 @@ const DEFAULT_MODELS: Model[] = [
     name: 'DeepSeek V3.1',
     provider: 'DeepSeek',
     description: 'Previous DeepSeek chat model',
-    pricing: { input: 0.15, output: 0.75 },
+    pricing: { input: 0.25, output: 0.95 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
@@ -552,7 +687,7 @@ const DEFAULT_MODELS: Model[] = [
     name: 'DeepSeek V3 0324',
     provider: 'DeepSeek',
     description: 'Earlier DeepSeek V3 checkpoint',
-    pricing: { input: 0.2, output: 0.77 },
+    pricing: { input: 0.25, output: 1 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
@@ -561,7 +696,7 @@ const DEFAULT_MODELS: Model[] = [
     name: 'DeepSeek R1 0528',
     provider: 'DeepSeek',
     description: 'Older R1 reasoning release',
-    pricing: { input: 0.45, output: 2.15 },
+    pricing: { input: 0.5, output: 2.15 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
@@ -572,6 +707,56 @@ const DEFAULT_MODELS: Model[] = [
     description: 'Original DeepSeek reasoning release',
     pricing: { input: 0.7, output: 2.5 },
     capabilities: ['reasoning'],
+    isLegacy: true,
+  },
+  {
+    id: 'qwen-3-8-max',
+    name: 'Qwen 3.8 Max',
+    provider: 'Qwen',
+    description:
+      'Flagship Qwen 3.8 for agentic coding, reasoning, and multimodal understanding',
+    pricing: { input: 2, output: 6 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'qwen-3-8-max-prime',
+    name: 'Qwen 3.8 Max Prime',
+    provider: 'Qwen',
+    description:
+      'Higher-throughput Qwen 3.8 Max for latency-sensitive, demanding workloads',
+    pricing: { input: 4, output: 12 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'qwen-3-8-flash',
+    name: 'Qwen 3.8 Flash',
+    provider: 'Qwen',
+    description:
+      'Fast, low-cost Qwen 3.8 tier with image and video understanding',
+    pricing: { input: 0.15, output: 0.47 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'qwen-3-7-max',
+    name: 'Qwen 3.7 Max',
+    provider: 'Qwen',
+    description:
+      'Flagship Qwen 3.7 model for agentic coding, reasoning, and productivity workflows',
+    pricing: { input: 1.48, output: 4.43 },
+    capabilities: ['reasoning'],
+    isLegacy: true,
+  },
+  {
+    id: 'qwen-3-7-plus',
+    name: 'Qwen 3.7 Plus',
+    provider: 'Qwen',
+    description:
+      'Cost-effective Qwen 3.7 tier with upgraded text and image understanding',
+    pricing: { input: 0.32, output: 1.28 },
+    capabilities: ['image', 'reasoning'],
     isLegacy: true,
   },
   {
@@ -587,7 +772,7 @@ const DEFAULT_MODELS: Model[] = [
     name: 'Qwen 3 Coder',
     provider: 'Qwen',
     description: "Alibaba's coding champion",
-    pricing: { input: 0.22, output: 1 },
+    pricing: { input: 0.3, output: 1 },
     capabilities: [],
     isLegacy: true,
   },
@@ -596,43 +781,104 @@ const DEFAULT_MODELS: Model[] = [
     name: 'Qwen 3 32B',
     provider: 'Qwen',
     description: "Alibaba's smart all-rounder with dynamic thinking",
-    pricing: { input: 0.08, output: 0.24 },
+    pricing: { input: 0.08, output: 0.28 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
   {
-    id: 'qwen-2-5-vl-32b',
-    name: 'Qwen 2.5 32B',
-    provider: 'Qwen',
-    description: 'Versatile open model with image understanding',
-    pricing: { input: 0.2, output: 0.6 },
-    capabilities: ['image'],
-    isLegacy: true,
+    id: 'kimi-k3',
+    name: 'Kimi K3',
+    provider: 'Moonshot',
+    description:
+      '2.8T-parameter multimodal reasoning model for complex coding and long-horizon agentic workflows',
+    pricing: { input: 3, output: 15 },
+    capabilities: ['image', 'reasoning'],
+    isFavorite: true,
+  },
+  {
+    id: 'kimi-k2-7-code',
+    name: 'Kimi K2.7 Code',
+    provider: 'Moonshot',
+    description:
+      'Coding-focused Kimi model for long-horizon programming and agentic task execution',
+    pricing: { input: 0.66, output: 3.3 },
+    capabilities: ['image', 'reasoning'],
   },
   {
     id: 'kimi-k2-0905',
     name: 'Kimi K2 (0905)',
     provider: 'Moonshot',
     description: 'Enhanced version with longer context',
-    pricing: { input: 0.4, output: 2 },
+    pricing: { input: 0.6, output: 2.5 },
     capabilities: ['reasoning'],
-    isFavorite: true,
+    isLegacy: true,
   },
   {
     id: 'kimi-k2-5',
     name: 'Kimi K2.5',
     provider: 'Moonshot',
     description: 'Native multimodal with visual coding',
-    pricing: { input: 0.45, output: 2.2 },
+    pricing: { input: 0.45, output: 2.25 },
     capabilities: ['image', 'reasoning'],
+    isLegacy: true,
   },
   {
     id: 'kimi-k2-0711',
     name: 'Kimi K2 (0711)',
     provider: 'Moonshot',
     description: "China's open-source capability champion",
-    pricing: { input: 0.55, output: 2.2 },
+    pricing: { input: 0.57, output: 2.3 },
     capabilities: [],
+    isLegacy: true,
+  },
+  {
+    id: 'glm-5-3',
+    name: 'GLM 5.3',
+    provider: 'Z.ai',
+    description:
+      "Z.ai's latest flagship for long-horizon agents and project-level software engineering",
+    pricing: { input: 0.38, output: 1.19 },
+    capabilities: ['reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'glm-5-3-prime',
+    name: 'GLM 5.3 Prime',
+    provider: 'Z.ai',
+    description:
+      'High-speed GLM 5.3 with the full model at 1.5–2× output throughput',
+    pricing: { input: 2.8, output: 8.8 },
+    capabilities: ['reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'glm-5-3-flashx',
+    name: 'GLM 5.3 FlashX',
+    provider: 'Z.ai',
+    description:
+      'High-speed native multimodal GLM 5.3 Flash variant at up to 200 tokens/s',
+    pricing: { input: 0.37, output: 1.25 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'glm-5-3-flash',
+    name: 'GLM 5.3 Flash',
+    provider: 'Z.ai',
+    description:
+      'Low-cost native multimodal GLM 5.3 tier for fast everyday work',
+    pricing: { input: 0.04, output: 0.5 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'glm-5-2',
+    name: 'GLM 5.2',
+    provider: 'Z.ai',
+    description:
+      'Large-scale reasoning model for long-horizon agents and project-level software engineering',
+    pricing: { input: 0.65, output: 2.04 },
+    capabilities: ['reasoning'],
     isLegacy: true,
   },
   {
@@ -641,8 +887,9 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'Z.ai',
     description:
       'A major leap in coding capability built for long-horizon, independently executed tasks',
-    pricing: { input: 1, output: 3.2 },
+    pricing: { input: 0.96, output: 3.03 },
     capabilities: ['reasoning'],
+    isLegacy: true,
   },
   {
     id: 'glm-5v-turbo',
@@ -659,8 +906,9 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'Z.ai',
     description:
       'Flagship model with enhanced programming and stable reasoning',
-    pricing: { input: 0.72, output: 2.3 },
+    pricing: { input: 0.6, output: 1.92 },
     capabilities: ['reasoning'],
+    isLegacy: true,
   },
   {
     id: 'glm-4-6v',
@@ -677,7 +925,7 @@ const DEFAULT_MODELS: Model[] = [
     provider: 'Z.ai',
     description:
       'Flagship model with enhanced programming and stable reasoning',
-    pricing: { input: 0.38, output: 1.98 },
+    pricing: { input: 0.6, output: 2.2 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
@@ -686,7 +934,7 @@ const DEFAULT_MODELS: Model[] = [
     name: 'GLM 4.6',
     provider: 'Z.ai',
     description: 'MoE model with superior coding capabilities',
-    pricing: { input: 0.39, output: 1.9 },
+    pricing: { input: 0.43, output: 1.75 },
     capabilities: ['reasoning'],
     isLegacy: true,
   },
@@ -719,6 +967,16 @@ const DEFAULT_MODELS: Model[] = [
     isLegacy: true,
   },
   {
+    id: 'minimax-m3',
+    name: 'MiniMax M3',
+    provider: 'MiniMax',
+    description:
+      'Multimodal MiniMax flagship with 1M context for long-horizon agentic work and coding',
+    pricing: { input: 0.3, output: 1.2 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
     id: 'minimax-m2-7',
     name: 'MiniMax M2.7',
     provider: 'MiniMax',
@@ -732,25 +990,47 @@ const DEFAULT_MODELS: Model[] = [
     name: 'MiniMax M2.5',
     provider: 'MiniMax',
     description: 'High-efficiency model optimized for coding and productivity',
-    pricing: { input: 0.25, output: 1.2 },
+    pricing: { input: 0.27, output: 1.08 },
     capabilities: ['reasoning'],
+    isLegacy: true,
   },
   {
     id: 'minimax-m2-1',
     name: 'MiniMax M2.1',
     provider: 'MiniMax',
     description: 'Lightweight model optimized for coding and agentic workflows',
-    pricing: { input: 0.27, output: 0.95 },
+    pricing: { input: 0.3, output: 1.2 },
     capabilities: ['reasoning'],
+    isLegacy: true,
   },
   {
     id: 'minimax-m2',
     name: 'MiniMax M2',
     provider: 'MiniMax',
     description: 'The efficiency champion for coding',
-    pricing: { input: 0.26, output: 1 },
+    pricing: { input: 0.3, output: 1.2 },
     capabilities: ['reasoning'],
     isLegacy: true,
+  },
+  {
+    id: 'mimo-v2-6-pro',
+    name: 'MiMo V2.6 Pro',
+    provider: 'Xiaomi',
+    description:
+      "Xiaomi's 1T+ parameter flagship for demanding multimodal reasoning and agentic work",
+    pricing: { input: 0.44, output: 0.87 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
+  },
+  {
+    id: 'mimo-v2-6-flash',
+    name: 'MiMo V2.6 Flash',
+    provider: 'Xiaomi',
+    description:
+      'Open-source 309B MoE model for fast, low-cost multimodal reasoning',
+    pricing: { input: 0.14, output: 0.28 },
+    capabilities: ['image', 'reasoning'],
+    badge: 'NEW',
   },
 ]
 
